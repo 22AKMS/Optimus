@@ -16,6 +16,10 @@ LOCAL_PORT="${PORT:-8080}"
 
 say() { printf '\n%s\n' "$*"; }
 
+require_cloud_project() {
+  [[ -n "$PROJECT_ID" ]] || { say "No gcloud project is configured."; return 1; }
+}
+
 local_running() {
   [[ -f "$PID_FILE" ]] || return 1
   local pid
@@ -64,23 +68,48 @@ local_status() {
 }
 
 show_cloud_status() {
-  [[ -n "$PROJECT_ID" ]] || { say "No gcloud project is configured."; return; }
+  require_cloud_project || return
   gcloud run services describe "$APP_SERVICE" --region "$REGION" --format='table(metadata.name,status.url,status.latestReadyRevisionName,status.conditions[0].status)' || true
 }
 
 show_cloud_url() {
-  [[ -n "$PROJECT_ID" ]] || { say "No gcloud project is configured."; return; }
+  require_cloud_project || return
   gcloud run services describe "$APP_SERVICE" --region "$REGION" --format='value(status.url)' || true
 }
 
+start_cloud_app() {
+  require_cloud_project || return
+  say "Starting Cloud Run web app $APP_SERVICE in $REGION..."
+  gcloud run services update "$APP_SERVICE" --region "$REGION" --scaling=auto
+  say "Cloud Run web app resumed with automatic scaling."
+  local url
+  url="$(gcloud run services describe "$APP_SERVICE" --region "$REGION" --format='value(status.url)' 2>/dev/null || true)"
+  [[ -n "$url" ]] && say "URL: $url"
+}
+
+stop_cloud_app() {
+  require_cloud_project || return
+  say "Stopping Cloud Run web app $APP_SERVICE in $REGION..."
+  gcloud run services update "$APP_SERVICE" --region "$REGION" --scaling=0
+  say "Cloud Run web app disabled. New requests will fail until you start it again."
+}
+
+cloud_app_status() {
+  require_cloud_project || return
+  local scaling
+  scaling="$(gcloud run services describe "$APP_SERVICE" --region "$REGION" --format='value(metadata.annotations.[run.googleapis.com/scalingMode],metadata.annotations.[run.googleapis.com/manualInstanceCount])' 2>/dev/null || true)"
+  say "Cloud Run scaling state: ${scaling:-unknown}"
+  show_cloud_status
+}
+
 tail_cloud_logs() {
-  [[ -n "$PROJECT_ID" ]] || { say "No gcloud project is configured."; return; }
+  require_cloud_project || return
   gcloud run services logs read "$APP_SERVICE" --region "$REGION" --limit=50
 }
 
 trigger_function() {
   local function_name="$1"
-  [[ -n "$PROJECT_ID" ]] || { say "No gcloud project is configured."; return; }
+  require_cloud_project || return
   local url
   url="$(gcloud functions describe "$function_name" --gen2 --region "$REGION" --format='value(serviceConfig.uri)' 2>/dev/null || true)"
   [[ -n "$url" ]] || { say "Could not find function URL for $function_name."; return; }
@@ -88,7 +117,7 @@ trigger_function() {
 }
 
 show_menu() {
-  cat <<EOF
+  cat <<'MENU'
 
 CVE Analyzer control panel
 1) Start local app
@@ -99,20 +128,21 @@ CVE Analyzer control panel
 6) Tail cloud logs
 7) Trigger syncRecentCves
 8) Trigger refreshTrendAnalytics
-9) Exit
-EOF
+9) Start Cloud Run web app
+10) Stop Cloud Run web app
+11) Cloud web app status
+12) Exit
+MENU
 }
 
-if [[ "${1:-}" == "start" ]]; then
-  start_local
-  exit 0
-elif [[ "${1:-}" == "stop" ]]; then
-  stop_local
-  exit 0
-elif [[ "${1:-}" == "status" ]]; then
-  local_status
-  exit 0
-fi
+case "${1:-}" in
+  start) start_local; exit 0 ;;
+  stop) stop_local; exit 0 ;;
+  status) local_status; exit 0 ;;
+  cloud-start) start_cloud_app; exit 0 ;;
+  cloud-stop) stop_cloud_app; exit 0 ;;
+  cloud-status) cloud_app_status; exit 0 ;;
+esac
 
 while true; do
   show_menu
@@ -126,7 +156,10 @@ while true; do
     6) tail_cloud_logs ;;
     7) trigger_function "$SYNC_FUNCTION" ;;
     8) trigger_function "$ANALYTICS_FUNCTION" ;;
-    9) exit 0 ;;
+    9) start_cloud_app ;;
+    10) stop_cloud_app ;;
+    11) cloud_app_status ;;
+    12) exit 0 ;;
     *) say "Invalid choice." ;;
   esac
 done

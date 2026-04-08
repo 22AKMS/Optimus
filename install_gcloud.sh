@@ -214,6 +214,9 @@ export PGPASSWORD="$DB_PASSWORD"
 log "Applying schema"
 psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PROXY_PORT" -U "$DB_USER" -d "$DB_NAME" -f db/schema-postgres.sql >/dev/null
 
+log "Performing initial NVD sync"
+DB_HOST=127.0.0.1 DB_PORT="$PROXY_PORT" DB_USER="$DB_USER" DB_NAME="$DB_NAME" DB_PASSWORD="$DB_PASSWORD" NVD_API_KEY="$NVD_API_KEY" node scripts/syncNvdToDb.js --days="$INITIAL_SYNC_DAYS" --max-records=300
+
 log "Ensuring service account exists"
 SA_EMAIL="${APP_SA}@${PROJECT_ID}.iam.gserviceaccount.com"
 if ! gcloud iam service-accounts describe "$SA_EMAIL" --project "$PROJECT_ID" >/dev/null 2>&1; then
@@ -278,12 +281,6 @@ gcloud run services update "$APP_SERVICE" \
   --update-env-vars "SYNC_FUNCTION_URL=$SYNC_URL,ANALYTICS_FUNCTION_URL=$ANALYTICS_URL" >/dev/null
 
 APP_URL="$(gcloud run services describe "$APP_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
-
-log "Triggering initial NVD sync in Google Cloud"
-curl -fsS -X POST "$SYNC_URL" \
-  -H 'Content-Type: application/json' \
-  -d "{\"days\":$INITIAL_SYNC_DAYS,\"max_records\":300,\"max_pages\":10}" >/tmp/initial-sync-response.json
-cat /tmp/initial-sync-response.json && echo
 
 log "Smoke testing deployment"
 if wait_for_url '/healthz'; then
