@@ -81,6 +81,37 @@ function normalizeSeverity(value) {
   return String(value || "").trim().toUpperCase() || null;
 }
 
+function buildWindowParams({ windowType, startIso, endIso }) {
+  if (windowType === "modified") {
+    return {
+      startKey: "lastModStartDate",
+      endKey: "lastModEndDate"
+    };
+  }
+
+  return {
+    startKey: "pubStartDate",
+    endKey: "pubEndDate"
+  };
+}
+
+async function fetchPage({ headers, windowType, startIso, endIso, startIndex = 0, resultsPerPage = null }) {
+  const url = new URL(API_BASE);
+  const keys = buildWindowParams({ windowType, startIso, endIso });
+  url.searchParams.set(keys.startKey, startIso);
+  url.searchParams.set(keys.endKey, endIso);
+  url.searchParams.set("startIndex", String(startIndex));
+  if (resultsPerPage) url.searchParams.set("resultsPerPage", String(resultsPerPage));
+
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    const payload = await response.text();
+    throw new Error(`NVD request failed (${response.status}): ${payload}`);
+  }
+
+  return response.json();
+}
+
 function parseCveRecord(wrapper) {
   const cve = wrapper.cve || wrapper;
   const metric = firstMetric(cve.metrics || {});
@@ -345,6 +376,8 @@ exports.syncRecentCves = async (req, res) => {
   const maxRecords = Math.min(Math.max(Number(req.body?.max_records || req.query.max_records || 250), 1), 1000);
   const maxPages = Math.min(Math.max(Number(req.body?.max_pages || req.query.max_pages || 10), 1), 20);
   const delayMs = Math.max(1000, Number(req.body?.delay_ms || req.query.delay_ms || 6500));
+  const requestedWindowType = String(req.body?.window_type || req.query.window_type || process.env.DEFAULT_SYNC_WINDOW_TYPE || "published").trim().toLowerCase();
+  const windowType = requestedWindowType === "modified" ? "modified" : "published";
 
   const now = new Date();
   const endIso = req.body?.end_date || req.query.end_date || now.toISOString();
@@ -356,42 +389,32 @@ exports.syncRecentCves = async (req, res) => {
     INSERT INTO ingest_runs (status, note)
     VALUES ('running', $1)
     RETURNING id
-  `, [`Syncing NVD CVEs from ${startIso} to ${endIso}`]);
+  `, [`Syncing NVD CVEs using ${windowType} window from ${startIso} to ${endIso}`]);
   const runId = runResult.rows[0].id;
 
   try {
-    let startIndex = 0;
-    let pageSize = null;
+    const firstPayload = await fetchPage({ headers, windowType, startIso, endIso, startIndex: 0 });
+    const firstVulnerabilities = Array.isArray(firstPayload.vulnerabilities) ? firstPayload.vulnerabilities : [];
+    const pageSize = Number(firstPayload.resultsPerPage || firstVulnerabilities.length || 1);
+    const totalResults = Number(firstPayload.totalResults || firstVulnerabilities.length || 0);
+    let startIndex = totalResults > 0 ? Math.floor((Math.max(totalResults, 1) - 1) / pageSize) * pageSize : 0;
     let page = 0;
     const records = [];
 
     while (page < maxPages && records.length < maxRecords) {
-      const url = new URL(API_BASE);
-      url.searchParams.set("lastModStartDate", startIso);
-      url.searchParams.set("lastModEndDate", endIso);
-      url.searchParams.set("startIndex", String(startIndex));
-      if (pageSize) url.searchParams.set("resultsPerPage", String(pageSize));
-
-      const response = await fetch(url, { headers });
-      if (!response.ok) {
-        const payload = await response.text();
-        throw new Error(`NVD request failed (${response.status}): ${payload}`);
-      }
-
-      const payload = await response.json();
+      const payload = startIndex === 0 ? firstPayload : await fetchPage({ headers, windowType, startIso, endIso, startIndex, resultsPerPage: pageSize });
       const vulnerabilities = Array.isArray(payload.vulnerabilities) ? payload.vulnerabilities : [];
-      if (!pageSize) pageSize = Number(payload.resultsPerPage || vulnerabilities.length || 1);
 
-      for (const item of vulnerabilities) {
+      for (const item of vulnerabilities.slice().reverse()) {
         if (records.length >= maxRecords) break;
         records.push(parseCveRecord(item));
       }
 
       page += 1;
-      startIndex += pageSize;
-      if (!vulnerabilities.length || startIndex >= Number(payload.totalResults || 0) || records.length >= maxRecords) {
+      if (!vulnerabilities.length || startIndex === 0 || records.length >= maxRecords) {
         break;
       }
+      startIndex = Math.max(0, startIndex - pageSize);
       await sleep(delayMs);
     }
 

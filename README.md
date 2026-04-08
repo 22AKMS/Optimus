@@ -105,3 +105,8 @@ Use `install_gcloud.sh` from the project root. It creates:
 - The app uses a single demo user by default via `APP_USER_ID`.
 - This is suitable for a course project demo. For production, add real auth, Secret Manager, and tighter access control on Cloud Run and Cloud Functions.
 - The app includes the NVD attribution notice required by the NVD developer documentation.
+
+
+## Sync behavior
+
+The app now defaults to a **published-date** sync window and fetches the newest pages first, so capped syncs populate the homepage with the newest published CVEs instead of older CVEs that were only modified recently. To backfill modified older CVEs, call the sync function with `window_type=modified`.

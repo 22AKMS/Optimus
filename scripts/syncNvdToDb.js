@@ -295,51 +295,70 @@ async function upsertCveRecord(client, record) {
   `, [record.id]);
 }
 
-async function fetchWindow({ startIso, endIso, maxRecords = 300, maxPages = 10, delayMs = 6500 }) {
+function buildWindowParams({ windowType, startIso, endIso }) {
+  if (windowType === "modified") {
+    return {
+      startKey: "lastModStartDate",
+      endKey: "lastModEndDate"
+    };
+  }
+
+  return {
+    startKey: "pubStartDate",
+    endKey: "pubEndDate"
+  };
+}
+
+async function fetchPage({ headers, windowType, startIso, endIso, startIndex = 0, resultsPerPage = null }) {
+  const url = new URL(API_BASE);
+  const keys = buildWindowParams({ windowType, startIso, endIso });
+  url.searchParams.set(keys.startKey, startIso);
+  url.searchParams.set(keys.endKey, endIso);
+  url.searchParams.set("startIndex", String(startIndex));
+  if (resultsPerPage) {
+    url.searchParams.set("resultsPerPage", String(resultsPerPage));
+  }
+
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    const payload = await response.text();
+    throw new Error(`NVD request failed (${response.status}): ${payload}`);
+  }
+
+  return response.json();
+}
+
+async function fetchWindow({ startIso, endIso, windowType = "published", maxRecords = 300, maxPages = 10, delayMs = 6500 }) {
   const headers = { "Accept": "application/json" };
   if (API_KEY) {
     headers.apiKey = API_KEY;
   }
 
-  let startIndex = 0;
-  let totalFetched = 0;
-  let page = 0;
-  let pageSize = null;
+  const firstPayload = await fetchPage({ headers, windowType, startIso, endIso, startIndex: 0 });
+  const firstVulnerabilities = Array.isArray(firstPayload.vulnerabilities) ? firstPayload.vulnerabilities : [];
+  const pageSize = Number(firstPayload.resultsPerPage || firstVulnerabilities.length || 0) || 1;
+  const totalResults = Number(firstPayload.totalResults || firstVulnerabilities.length || 0);
   const allRecords = [];
+  let page = 0;
+  let startIndex = totalResults > 0 ? Math.floor((Math.max(totalResults, 1) - 1) / pageSize) * pageSize : 0;
 
-  while (page < maxPages && totalFetched < maxRecords) {
-    const url = new URL(API_BASE);
-    url.searchParams.set("lastModStartDate", startIso);
-    url.searchParams.set("lastModEndDate", endIso);
-    url.searchParams.set("startIndex", String(startIndex));
-    if (pageSize) {
-      url.searchParams.set("resultsPerPage", String(pageSize));
-    }
-
-    const response = await fetch(url, { headers });
-    if (!response.ok) {
-      const payload = await response.text();
-      throw new Error(`NVD request failed (${response.status}): ${payload}`);
-    }
-
-    const payload = await response.json();
+  while (page < maxPages && allRecords.length < maxRecords) {
+    const payload = startIndex === 0 ? firstPayload : await fetchPage({ headers, windowType, startIso, endIso, startIndex, resultsPerPage: pageSize });
     const vulnerabilities = Array.isArray(payload.vulnerabilities) ? payload.vulnerabilities : [];
-    const records = vulnerabilities.map(parseCveRecord);
 
-    if (!pageSize) {
-      pageSize = Number(payload.resultsPerPage || vulnerabilities.length || 0) || 1;
+    for (const item of vulnerabilities.slice().reverse()) {
+      if (allRecords.length >= maxRecords) {
+        break;
+      }
+      allRecords.push(parseCveRecord(item));
     }
 
-    allRecords.push(...records.slice(0, Math.max(0, maxRecords - totalFetched)));
-    totalFetched += vulnerabilities.length;
     page += 1;
-
-    const totalResults = Number(payload.totalResults || 0);
-    startIndex += pageSize;
-    if (!vulnerabilities.length || startIndex >= totalResults || allRecords.length >= maxRecords) {
+    if (!vulnerabilities.length || startIndex === 0 || allRecords.length >= maxRecords) {
       break;
     }
 
+    startIndex = Math.max(0, startIndex - pageSize);
     await sleep(delayMs);
   }
 
@@ -352,6 +371,7 @@ async function main() {
   const days = Number(args.days || 30);
   const endIso = args['end-date'] || now.toISOString();
   const startIso = args['start-date'] || new Date(now.getTime() - (days * 24 * 60 * 60 * 1000)).toISOString();
+  const windowType = String(args['window-type'] || process.env.DEFAULT_SYNC_WINDOW_TYPE || 'published').trim().toLowerCase() === 'modified' ? 'modified' : 'published';
   const maxRecords = Number(args['max-records'] || 300);
   const maxPages = Number(args['max-pages'] || 10);
   const delayMs = Number(args['delay-ms'] || 6500);
@@ -360,11 +380,11 @@ async function main() {
     INSERT INTO ingest_runs (status, note)
     VALUES ('running', $1)
     RETURNING id
-  `, [`Syncing NVD CVEs from ${startIso} to ${endIso}`]);
+  `, [`Syncing NVD CVEs using ${windowType} window from ${startIso} to ${endIso}`]);
   const runId = runStart.rows[0].id;
 
   try {
-    const records = await fetchWindow({ startIso, endIso, maxRecords, maxPages, delayMs });
+    const records = await fetchWindow({ startIso, endIso, windowType, maxRecords, maxPages, delayMs });
     const client = await pool.connect();
     try {
       for (const record of records) {
@@ -387,9 +407,9 @@ async function main() {
       UPDATE ingest_runs
       SET finished_at = NOW(), status = 'success', cve_count = $2, note = $3
       WHERE id = $1
-    `, [runId, records.length, `Synced ${records.length} CVEs.`]);
+    `, [runId, records.length, `Synced ${records.length} CVEs using ${windowType} window.`]);
 
-    console.log(`Synced ${records.length} CVEs from ${startIso} to ${endIso}.`);
+    console.log(`Synced ${records.length} CVEs using ${windowType} window from ${startIso} to ${endIso}.`);
   } catch (error) {
     await pool.query(`
       UPDATE ingest_runs

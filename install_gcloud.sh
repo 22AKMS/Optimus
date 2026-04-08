@@ -215,7 +215,7 @@ log "Applying schema"
 psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PROXY_PORT" -U "$DB_USER" -d "$DB_NAME" -f db/schema-postgres.sql >/dev/null
 
 log "Performing initial NVD sync"
-DB_HOST=127.0.0.1 DB_PORT="$PROXY_PORT" DB_USER="$DB_USER" DB_NAME="$DB_NAME" DB_PASSWORD="$DB_PASSWORD" NVD_API_KEY="$NVD_API_KEY" node scripts/syncNvdToDb.js --days="$INITIAL_SYNC_DAYS" --max-records=300
+DB_HOST=127.0.0.1 DB_PORT="$PROXY_PORT" DB_USER="$DB_USER" DB_NAME="$DB_NAME" DB_PASSWORD="$DB_PASSWORD" NVD_API_KEY="$NVD_API_KEY" DEFAULT_SYNC_WINDOW_TYPE=published node scripts/syncNvdToDb.js --days="$INITIAL_SYNC_DAYS" --window-type=published --max-records=300
 
 log "Ensuring service account exists"
 SA_EMAIL="${APP_SA}@${PROJECT_ID}.iam.gserviceaccount.com"
@@ -236,7 +236,7 @@ gcloud run deploy "$APP_SERVICE" \
   --allow-unauthenticated \
   --service-account "$SA_EMAIL" \
   --add-cloudsql-instances "$INSTANCE_CONNECTION_NAME" \
-  --set-env-vars "APP_NAME=CVE Analyzer,APP_USER_ID=$APP_USER_ID,FIRESTORE_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=$FIRESTORE_DB,INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,NVD_API_KEY=$NVD_API_KEY"
+  --set-env-vars "APP_NAME=CVE Analyzer,APP_USER_ID=$APP_USER_ID,FIRESTORE_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=$FIRESTORE_DB,INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,NVD_API_KEY=$NVD_API_KEY,DEFAULT_SYNC_WINDOW_TYPE=published"
 
 log "Deploying function $SYNC_FUNCTION"
 gcloud functions deploy "$SYNC_FUNCTION" \
@@ -249,7 +249,7 @@ gcloud functions deploy "$SYNC_FUNCTION" \
   --trigger-http \
   --allow-unauthenticated \
   --service-account="$SA_EMAIL" \
-  --set-env-vars "INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,NVD_API_KEY=$NVD_API_KEY"
+  --set-env-vars "INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,NVD_API_KEY=$NVD_API_KEY,DEFAULT_SYNC_WINDOW_TYPE=published"
 
 log "Deploying function $ANALYTICS_FUNCTION"
 gcloud functions deploy "$ANALYTICS_FUNCTION" \
