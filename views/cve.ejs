@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title><%= appName %></title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body data-cve-id="<%= cveId %>" data-user-id="<%= appUserId %>">
+  <header class="page-header slim">
+    <a class="back-link" href="/">← Back to CVE list</a>
+    <p class="header-copy"><%= sourceNotice %></p>
+  </header>
+
+  <main class="layout detail-layout">
+    <section id="cveHero" class="detail-hero panel"></section>
+
+    <section class="detail-grid-3">
+      <div class="panel">
+        <div class="section-title-row">
+          <h2>Affected Software</h2>
+        </div>
+        <div id="productsList" class="stack"></div>
+      </div>
+
+      <div class="panel">
+        <div class="section-title-row">
+          <h2>References</h2>
+        </div>
+        <div id="referencesList" class="stack"></div>
+      </div>
+
+      <aside class="stack">
+        <div class="panel">
+          <h2>Related CVEs</h2>
+          <div id="relatedCves" class="stack"></div>
+        </div>
+        <div class="panel">
+          <h2>Status</h2>
+          <p id="actionMessage" class="muted compact"></p>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script src="/static/cve.js" defer></script>
+</body>
+</html>

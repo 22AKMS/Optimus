@@ -1,0 +1,397 @@
+const path = require("path");
+const express = require("express");
+const dotenv = require("dotenv");
+
+dotenv.config({ path: path.join(__dirname, ".env") });
+
+const { query, serializeCve, getCveById, severityOrderSql } = require("./lib/db");
+const { UserStateStore } = require("./lib/firestoreStore");
+
+const app = express();
+const port = Number(process.env.PORT || 8080);
+const defaultUserId = process.env.APP_USER_ID || "demo-user";
+const appName = process.env.APP_NAME || "CVE Analyzer";
+const sourceNotice = process.env.SOURCE_NOTICE || "This product uses data from the NVD API but is not endorsed or certified by the NVD.";
+const store = new UserStateStore();
+
+app.set("view engine", "ejs");
+app.set("views", path.join(__dirname, "views"));
+app.use(express.json());
+app.use("/static", express.static(path.join(__dirname, "public")));
+
+app.get("/healthz", async (req, res) => {
+  try {
+    await query("SELECT 1");
+    res.json({ ok: true, app: appName });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/", (req, res) => {
+  res.render("index", { appUserId: defaultUserId, appName, sourceNotice });
+});
+
+app.get("/cves/:cveId", (req, res) => {
+  res.render("cve", {
+    appUserId: defaultUserId,
+    appName,
+    sourceNotice,
+    cveId: String(req.params.cveId || "").trim().toUpperCase()
+  });
+});
+
+app.get("/api/analytics/overview", async (req, res) => {
+  try {
+    const overviewResult = await query(`
+      SELECT
+        COUNT(*)::int AS total_cves,
+        COUNT(*) FILTER (WHERE severity = 'CRITICAL')::int AS critical_cves,
+        COUNT(*) FILTER (WHERE published_at >= NOW() - INTERVAL '30 days')::int AS recent_cves,
+        COUNT(*) FILTER (WHERE has_kev)::int AS kev_cves,
+        MAX(published_at) AS latest_published_at
+      FROM cves
+    `);
+
+    const catalogResult = await query(`
+      SELECT
+        (SELECT COUNT(*)::int FROM vendors) AS vendor_count,
+        (SELECT COUNT(*)::int FROM products) AS product_count
+    `);
+
+    const latestRun = await query(`
+      SELECT started_at, finished_at, status, cve_count, note
+      FROM ingest_runs
+      ORDER BY started_at DESC
+      LIMIT 1
+    `);
+
+    res.json({
+      overview: overviewResult.rows[0],
+      catalog: catalogResult.rows[0],
+      latest_run: latestRun.rows[0] || null
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/cves", async (req, res) => {
+  try {
+    const search = String(req.query.search || "").trim();
+    const severity = String(req.query.severity || "").trim().toUpperCase();
+    const product = String(req.query.product || "").trim();
+    const yearRaw = String(req.query.year || "").trim();
+    const sort = String(req.query.sort || "newest").trim();
+    const limit = Math.min(Math.max(Number(req.query.limit || 40), 1), 100);
+
+    const clauses = [];
+    const params = [];
+    let i = 1;
+
+    if (search) {
+      clauses.push(`(
+        c.id ILIKE $${i}
+        OR c.description ILIKE $${i}
+        OR COALESCE(c.cwe_id, '') ILIKE $${i}
+        OR COALESCE(c.cwe_name, '') ILIKE $${i}
+        OR EXISTS (
+          SELECT 1
+          FROM cve_products cp
+          JOIN products p ON p.id = cp.product_id
+          JOIN vendors v ON v.id = p.vendor_id
+          WHERE cp.cve_id = c.id
+            AND (p.name ILIKE $${i} OR v.name ILIKE $${i})
+        )
+      )`);
+      params.push(`%${search}%`);
+      i += 1;
+    }
+
+    if (severity) {
+      clauses.push(`c.severity = $${i}`);
+      params.push(severity);
+      i += 1;
+    }
+
+    const parsedYear = Number(yearRaw);
+    if (yearRaw && Number.isInteger(parsedYear)) {
+      clauses.push(`c.year = $${i}`);
+      params.push(parsedYear);
+      i += 1;
+    }
+
+    if (product) {
+      clauses.push(`EXISTS (
+        SELECT 1
+        FROM cve_products cp
+        JOIN products p ON p.id = cp.product_id
+        JOIN vendors v ON v.id = p.vendor_id
+        WHERE cp.cve_id = c.id
+          AND (p.name ILIKE $${i} OR v.name ILIKE $${i})
+      )`);
+      params.push(`%${product}%`);
+      i += 1;
+    }
+
+    const orderBy = {
+      newest: "c.published_at DESC, c.cvss_base_score DESC NULLS LAST, c.id DESC",
+      severity: `${severityOrderSql("c.severity")} DESC, c.cvss_base_score DESC NULLS LAST, c.published_at DESC`,
+      modified: "c.last_modified_at DESC, c.published_at DESC, c.id DESC",
+      trending: "c.trending_score DESC, c.cvss_base_score DESC NULLS LAST, c.published_at DESC"
+    }[sort] || "c.published_at DESC, c.id DESC";
+
+    const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    params.push(limit);
+
+    const itemsResult = await query(`
+      SELECT
+        c.*,
+        primary_match.vendor_name AS primary_vendor,
+        primary_match.product_name AS primary_product,
+        primary_match.product_id AS primary_product_id
+      FROM cves c
+      LEFT JOIN LATERAL (
+        SELECT
+          v.name AS vendor_name,
+          p.name AS product_name,
+          p.id AS product_id
+        FROM cve_products cp
+        JOIN products p ON p.id = cp.product_id
+        JOIN vendors v ON v.id = p.vendor_id
+        WHERE cp.cve_id = c.id
+        ORDER BY v.name ASC, p.name ASC
+        LIMIT 1
+      ) primary_match ON TRUE
+      ${whereSql}
+      ORDER BY ${orderBy}
+      LIMIT $${params.length}
+    `, params);
+
+    const yearsResult = await query(`
+      SELECT DISTINCT year
+      FROM cves
+      ORDER BY year DESC
+      LIMIT 20
+    `);
+
+    const severities = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE"];
+
+    res.json({
+      items: itemsResult.rows.map(serializeCve),
+      years: yearsResult.rows.map((row) => Number(row.year)).filter(Boolean),
+      severities
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/high-severity", async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT
+        c.*,
+        primary_match.vendor_name AS primary_vendor,
+        primary_match.product_name AS primary_product,
+        primary_match.product_id AS primary_product_id
+      FROM cves c
+      LEFT JOIN LATERAL (
+        SELECT
+          v.name AS vendor_name,
+          p.name AS product_name,
+          p.id AS product_id
+        FROM cve_products cp
+        JOIN products p ON p.id = cp.product_id
+        JOIN vendors v ON v.id = p.vendor_id
+        WHERE cp.cve_id = c.id
+        ORDER BY v.name ASC, p.name ASC
+        LIMIT 1
+      ) primary_match ON TRUE
+      ORDER BY ${severityOrderSql("c.severity")} DESC, c.cvss_base_score DESC NULLS LAST, c.published_at DESC
+      LIMIT 8
+    `);
+
+    res.json({ items: result.rows.map(serializeCve) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/cves/:cveId", async (req, res) => {
+  try {
+    const cveId = String(req.params.cveId || "").trim().toUpperCase();
+    const row = await getCveById(cveId);
+
+    if (!row) {
+      return res.status(404).json({ error: "CVE not found" });
+    }
+
+    const [productsResult, referencesResult, relatedResult, savedCves, watchedProducts] = await Promise.all([
+      query(`
+        SELECT
+          p.id AS product_id,
+          p.name AS product_name,
+          v.name AS vendor_name,
+          p.cpe_uri AS canonical_cpe_uri,
+          cp.cpe_uri,
+          cp.version_start_including,
+          cp.version_start_excluding,
+          cp.version_end_including,
+          cp.version_end_excluding,
+          cp.is_vulnerable
+        FROM cve_products cp
+        JOIN products p ON p.id = cp.product_id
+        JOIN vendors v ON v.id = p.vendor_id
+        WHERE cp.cve_id = $1
+        ORDER BY v.name ASC, p.name ASC
+        LIMIT 50
+      `, [cveId]),
+      query(`
+        SELECT url, source, tags
+        FROM cve_references
+        WHERE cve_id = $1
+        ORDER BY id ASC
+        LIMIT 50
+      `, [cveId]),
+      query(`
+        SELECT
+          c.*,
+          primary_match.vendor_name AS primary_vendor,
+          primary_match.product_name AS primary_product,
+          primary_match.product_id AS primary_product_id
+        FROM cves c
+        LEFT JOIN LATERAL (
+          SELECT v.name AS vendor_name, p.name AS product_name, p.id AS product_id
+          FROM cve_products cp
+          JOIN products p ON p.id = cp.product_id
+          JOIN vendors v ON v.id = p.vendor_id
+          WHERE cp.cve_id = c.id
+          ORDER BY v.name ASC, p.name ASC
+          LIMIT 1
+        ) primary_match ON TRUE
+        WHERE c.id <> $1
+          AND (
+            ($2 <> '' AND c.cwe_id = $2)
+            OR EXISTS (
+              SELECT 1
+              FROM cve_products cp_self
+              JOIN cve_products cp_other ON cp_other.product_id = cp_self.product_id
+              WHERE cp_self.cve_id = $1
+                AND cp_other.cve_id = c.id
+            )
+          )
+        ORDER BY c.trending_score DESC, c.cvss_base_score DESC NULLS LAST, c.published_at DESC
+        LIMIT 5
+      `, [cveId, row.cwe_id || ""]),
+      store.getSavedCves(defaultUserId),
+      store.getWatchedProducts(defaultUserId)
+    ]);
+
+    const watchedIds = new Set(watchedProducts.map((item) => Number(item.product_id)));
+    const serialized = serializeCve(row);
+
+    res.json({
+      ...serialized,
+      products: productsResult.rows.map((product) => ({
+        product_id: Number(product.product_id),
+        product_name: product.product_name,
+        vendor_name: product.vendor_name,
+        canonical_cpe_uri: product.canonical_cpe_uri,
+        cpe_uri: product.cpe_uri,
+        version_start_including: product.version_start_including,
+        version_start_excluding: product.version_start_excluding,
+        version_end_including: product.version_end_including,
+        version_end_excluding: product.version_end_excluding,
+        is_vulnerable: Boolean(product.is_vulnerable)
+      })),
+      references: referencesResult.rows,
+      related_cves: relatedResult.rows.map(serializeCve),
+      saved: savedCves.includes(cveId),
+      primary_product_watched: serialized.primary_product_id ? watchedIds.has(serialized.primary_product_id) : false
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/cves/:cveId/saved", async (req, res) => {
+  try {
+    const cveId = String(req.params.cveId || "").trim().toUpperCase();
+    const exists = await query("SELECT id FROM cves WHERE id = $1", [cveId]);
+    if (!exists.rows[0]) {
+      return res.status(404).json({ error: "CVE not found" });
+    }
+
+    await store.addSavedCve(defaultUserId, cveId);
+    res.json({ ok: true, cve_id: cveId });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/cves/:cveId/saved", async (req, res) => {
+  try {
+    const cveId = String(req.params.cveId || "").trim().toUpperCase();
+    await store.removeSavedCve(defaultUserId, cveId);
+    res.json({ ok: true, cve_id: cveId });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/cves/:cveId/watch-product", async (req, res) => {
+  try {
+    const cveId = String(req.params.cveId || "").trim().toUpperCase();
+    const productId = Number(req.body?.product_id || 0);
+
+    const cveExists = await query("SELECT id FROM cves WHERE id = $1", [cveId]);
+    if (!cveExists.rows[0]) {
+      return res.status(404).json({ error: "CVE not found" });
+    }
+
+    if (!productId) {
+      return res.status(400).json({ error: "product_id is required" });
+    }
+
+    const productResult = await query(`
+      SELECT p.id AS product_id, p.name AS product_name, v.name AS vendor_name
+      FROM products p
+      JOIN vendors v ON v.id = p.vendor_id
+      WHERE p.id = $1
+    `, [productId]);
+
+    const product = productResult.rows[0];
+    if (!product) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    await store.addWatchedProduct(defaultUserId, {
+      product_id: productId,
+      product_name: product.product_name,
+      vendor_name: product.vendor_name
+    });
+
+    res.json({ ok: true, product_id: productId });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/cves/:cveId/watch-product/:productId", async (req, res) => {
+  try {
+    const productId = Number(req.params.productId || 0);
+    if (!productId) {
+      return res.status(400).json({ error: "product_id is required" });
+    }
+
+    await store.removeWatchedProduct(defaultUserId, productId);
+    res.json({ ok: true, product_id: productId });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.listen(port, () => {
+  console.log(`${appName} running on http://localhost:${port}`);
+});
