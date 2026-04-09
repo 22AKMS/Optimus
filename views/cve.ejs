@@ -12,9 +12,12 @@
   <header class="page-header slim">
     <div class="detail-topbar">
       <a class="back-link" href="/">← Back to CVE list</a>
-      <div class="brand-inline">
-        <img src="/static/favicon.png" alt="Optimus logo" class="brand-mark small">
-        <span class="eyebrow compact-eyebrow"><%= appName %></span>
+      <div class="header-actions">
+        <a class="nav-button secondary" href="/watchlist">Watchlist</a>
+        <div class="brand-inline">
+          <img src="/static/favicon.png" alt="Optimus logo" class="brand-mark small">
+          <span class="eyebrow compact-eyebrow"><%= appName %></span>
+        </div>
       </div>
     </div>
     <p class="header-copy"><%= sourceNotice %></p>
@@ -23,7 +26,7 @@
   <main class="layout detail-layout">
     <section id="cveHero" class="detail-hero panel"></section>
 
-    <section class="detail-grid-3">
+    <section class="detail-grid-3 detail-grid-balance">
       <div class="panel">
         <div class="section-title-row">
           <h2>Affected Software</h2>
@@ -43,14 +46,11 @@
           <h2>Related CVEs</h2>
           <div id="relatedCves" class="stack"></div>
         </div>
-        <div class="panel">
-          <h2>Status</h2>
-          <p id="actionMessage" class="muted compact"></p>
-        </div>
       </aside>
     </section>
   </main>
 
+  <div id="actionToast" class="toast" aria-live="polite" role="status"></div>
   <script src="/static/cve.js" defer></script>
 </body>
 </html>

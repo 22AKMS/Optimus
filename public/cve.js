@@ -1,5 +1,6 @@
 const cveId = String(document.body.dataset.cveId || "").trim().toUpperCase();
 let currentCve = null;
+let toastTimer = null;
 
 async function fetchJson(url, options = {}) {
   const response = await fetch(url, options);
@@ -15,7 +16,7 @@ function escapeHtml(value) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/\"/g, "&quot;")
+    .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
 
@@ -37,13 +38,24 @@ function safeUrl(url) {
   return /^https?:\/\//i.test(value) ? value : "#";
 }
 
+function showToast(message, variant = "success") {
+  const toast = document.getElementById("actionToast");
+  if (!toast) return;
+  toast.textContent = message;
+  toast.className = `toast show ${variant}`;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toast.className = "toast";
+  }, 2600);
+}
+
 function renderHero(data) {
   const hero = document.getElementById("cveHero");
   const watchDisabled = !data.primary_product_id;
 
   hero.innerHTML = `
     <div class="stack">
-      <div class="section-title-row compact-row">
+      <div class="section-title-row compact-row hero-title-row">
         <div>
           <p class="eyebrow">${escapeHtml(data.primary_vendor || "Unknown vendor")}</p>
           <h1>${escapeHtml(data.id)}</h1>
@@ -92,7 +104,7 @@ function renderHero(data) {
 function renderProducts(products) {
   const target = document.getElementById("productsList");
   if (!products.length) {
-    target.innerHTML = '<div class="empty-state">No affected software entries were normalized for this CVE.</div>';
+    target.innerHTML = '<div class="empty-state">No normalized affected software was returned by the current NVD record yet. Run a later sync or a modified-window refresh after NVD enrichment catches up.</div>';
     return;
   }
 
@@ -150,17 +162,13 @@ function renderRelated(items) {
   `).join("");
 }
 
-function showMessage(message) {
-  document.getElementById("actionMessage").textContent = message;
-}
-
 function showError(error) {
-  showMessage(error.message || String(error));
+  showToast(error.message || String(error), "error");
 }
 
 async function toggleSaved(isSaved) {
   await fetchJson(`/api/cves/${encodeURIComponent(cveId)}/saved`, { method: isSaved ? "DELETE" : "POST" });
-  showMessage(isSaved ? "Removed from saved CVEs." : "Saved CVE.");
+  showToast(isSaved ? "Removed from saved CVEs." : "Saved CVE.");
   await loadCve();
 }
 
@@ -171,14 +179,14 @@ async function toggleWatch(isWatched) {
 
   if (isWatched) {
     await fetchJson(`/api/cves/${encodeURIComponent(cveId)}/watch-product/${currentCve.primary_product_id}`, { method: "DELETE" });
-    showMessage("Removed watched product.");
+    showToast("Removed watched product.");
   } else {
     await fetchJson(`/api/cves/${encodeURIComponent(cveId)}/watch-product`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ product_id: currentCve.primary_product_id })
     });
-    showMessage("Product added to watchlist.");
+    showToast("Product added to watchlist.");
   }
 
   await loadCve();

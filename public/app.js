@@ -1,6 +1,6 @@
 const state = {
   cves: [],
-  severities: ["CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE"],
+  severities: ["CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE", "UNKNOWN"],
   years: []
 };
 
@@ -18,7 +18,7 @@ function escapeHtml(value) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/\"/g, "&quot;")
+    .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
 
@@ -52,13 +52,14 @@ function statCard(label, value, detail = "") {
 }
 
 function cveCard(cve) {
+  const severity = cve.severity || "UNKNOWN";
   return `
     <article class="item-card">
       <div class="item-card-body stack tight">
         <div>
           <div class="section-title-row compact-row">
             <h3>${escapeHtml(cve.id)}</h3>
-            <span class="badge ${severityClass(cve.severity)}">${escapeHtml(cve.severity || "UNKNOWN")}</span>
+            <span class="badge ${severityClass(severity)}">${escapeHtml(severity)}</span>
           </div>
           <p class="muted compact">${escapeHtml(cve.primary_vendor || "Unknown vendor")} · ${escapeHtml(cve.primary_product || "Unknown product")}</p>
         </div>
@@ -76,11 +77,12 @@ function cveCard(cve) {
 }
 
 function highSeverityCard(cve) {
+  const severity = cve.severity || "UNKNOWN";
   return `
     <a class="card-link mini-card" href="/cves/${encodeURIComponent(cve.id)}">
       <div class="section-title-row compact-row">
         <strong>${escapeHtml(cve.id)}</strong>
-        <span class="badge ${severityClass(cve.severity)}">${escapeHtml(cve.severity || "UNKNOWN")}</span>
+        <span class="badge ${severityClass(severity)}">${escapeHtml(severity)}</span>
       </div>
       <div class="muted compact">${escapeHtml(cve.primary_vendor || "Unknown vendor")} · ${escapeHtml(cve.primary_product || "Unknown product")}</div>
       <div class="badge-row left-align">

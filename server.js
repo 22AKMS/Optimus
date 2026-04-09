@@ -4,7 +4,7 @@ const dotenv = require("dotenv");
 
 dotenv.config({ path: path.join(__dirname, ".env") });
 
-const { query, serializeCve, getCveById, severityOrderSql } = require("./lib/db");
+const { query, serializeCve, getCveById, severityOrderSql, normalizedSeveritySql } = require("./lib/db");
 const { UserStateStore } = require("./lib/firestoreStore");
 
 const app = express();
@@ -32,6 +32,10 @@ app.get("/", (req, res) => {
   res.render("index", { appUserId: defaultUserId, appName, sourceNotice });
 });
 
+app.get("/watchlist", (req, res) => {
+  res.render("watchlist", { appUserId: defaultUserId, appName, sourceNotice });
+});
+
 app.get("/cves/:cveId", (req, res) => {
   res.render("cve", {
     appUserId: defaultUserId,
@@ -43,11 +47,12 @@ app.get("/cves/:cveId", (req, res) => {
 
 app.get("/api/analytics/overview", async (req, res) => {
   try {
+    const severityExpr = normalizedSeveritySql("severity", "cvss_base_score");
     const overviewResult = await query(`
       SELECT
         COUNT(*)::int AS total_cves,
-        COUNT(*) FILTER (WHERE severity = 'CRITICAL')::int AS critical_cves,
-        COUNT(*) FILTER (WHERE severity = 'HIGH')::int AS high_cves,
+        COUNT(*) FILTER (WHERE ${severityExpr} = 'CRITICAL')::int AS critical_cves,
+        COUNT(*) FILTER (WHERE ${severityExpr} = 'HIGH')::int AS high_cves,
         COUNT(*) FILTER (WHERE published_at >= NOW() - INTERVAL '30 days')::int AS recent_cves,
         COUNT(*) FILTER (WHERE has_kev)::int AS kev_cves,
         ROUND(AVG(cvss_base_score)::numeric, 1) AS avg_cvss,
@@ -85,6 +90,7 @@ app.get("/api/cves", async (req, res) => {
     const clauses = [];
     const params = [];
     let i = 1;
+    const severityExpr = normalizedSeveritySql("c.severity", "c.cvss_base_score");
 
     if (search) {
       clauses.push(`(
@@ -106,7 +112,7 @@ app.get("/api/cves", async (req, res) => {
     }
 
     if (severity) {
-      clauses.push(`c.severity = $${i}`);
+      clauses.push(`${severityExpr} = $${i}`);
       params.push(severity);
       i += 1;
     }
@@ -133,7 +139,7 @@ app.get("/api/cves", async (req, res) => {
 
     const orderBy = {
       newest: "c.published_at DESC, c.cvss_base_score DESC NULLS LAST, c.id DESC",
-      severity: `${severityOrderSql("c.severity")} DESC, c.cvss_base_score DESC NULLS LAST, c.published_at DESC`,
+      severity: `${severityOrderSql("c.severity", "c.cvss_base_score")} DESC, c.cvss_base_score DESC NULLS LAST, c.published_at DESC`,
       modified: "c.last_modified_at DESC, c.published_at DESC, c.id DESC",
       trending: "c.trending_score DESC, c.cvss_base_score DESC NULLS LAST, c.published_at DESC"
     }[sort] || "c.published_at DESC, c.id DESC";
@@ -144,6 +150,7 @@ app.get("/api/cves", async (req, res) => {
     const itemsResult = await query(`
       SELECT
         c.*,
+        ${severityExpr} AS display_severity,
         primary_match.vendor_name AS primary_vendor,
         primary_match.product_name AS primary_product,
         primary_match.product_id AS primary_product_id
@@ -172,7 +179,7 @@ app.get("/api/cves", async (req, res) => {
       LIMIT 20
     `);
 
-    const severities = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE"];
+    const severities = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE", "UNKNOWN"];
 
     res.json({
       items: itemsResult.rows.map(serializeCve),
@@ -189,6 +196,7 @@ app.get("/api/high-severity", async (req, res) => {
     const result = await query(`
       SELECT
         c.*,
+        ${normalizedSeveritySql("c.severity", "c.cvss_base_score")} AS display_severity,
         primary_match.vendor_name AS primary_vendor,
         primary_match.product_name AS primary_product,
         primary_match.product_id AS primary_product_id
@@ -205,11 +213,55 @@ app.get("/api/high-severity", async (req, res) => {
         ORDER BY v.name ASC, p.name ASC
         LIMIT 1
       ) primary_match ON TRUE
-      ORDER BY ${severityOrderSql("c.severity")} DESC, c.cvss_base_score DESC NULLS LAST, c.published_at DESC
+      ORDER BY ${severityOrderSql("c.severity", "c.cvss_base_score")} DESC, c.cvss_base_score DESC NULLS LAST, c.published_at DESC
       LIMIT 8
     `);
 
     res.json({ items: result.rows.map(serializeCve) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/watchlist", async (req, res) => {
+  try {
+    const savedIds = await store.getSavedCves(defaultUserId);
+    const watchedProducts = await store.getWatchedProducts(defaultUserId);
+
+    if (!savedIds.length) {
+      return res.json({ items: [], watched_products: watchedProducts, count: 0 });
+    }
+
+    const placeholders = savedIds.map((_, index) => `$${index + 1}`).join(", ");
+    const result = await query(`
+      SELECT
+        c.*,
+        ${normalizedSeveritySql("c.severity", "c.cvss_base_score")} AS display_severity,
+        primary_match.vendor_name AS primary_vendor,
+        primary_match.product_name AS primary_product,
+        primary_match.product_id AS primary_product_id
+      FROM cves c
+      LEFT JOIN LATERAL (
+        SELECT
+          v.name AS vendor_name,
+          p.name AS product_name,
+          p.id AS product_id
+        FROM cve_products cp
+        JOIN products p ON p.id = cp.product_id
+        JOIN vendors v ON v.id = p.vendor_id
+        WHERE cp.cve_id = c.id
+        ORDER BY v.name ASC, p.name ASC
+        LIMIT 1
+      ) primary_match ON TRUE
+      WHERE c.id IN (${placeholders})
+      ORDER BY c.published_at DESC, c.cvss_base_score DESC NULLS LAST, c.id DESC
+    `, savedIds);
+
+    res.json({
+      items: result.rows.map(serializeCve),
+      watched_products: watchedProducts,
+      count: result.rows.length
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -253,7 +305,8 @@ app.get("/api/cves/:cveId", async (req, res) => {
       `, [cveId]),
       query(`
         SELECT
-          c.*,
+          c.*, 
+          ${normalizedSeveritySql("c.severity", "c.cvss_base_score")} AS display_severity,
           primary_match.vendor_name AS primary_vendor,
           primary_match.product_name AS primary_product,
           primary_match.product_id AS primary_product_id
@@ -365,8 +418,8 @@ app.post("/api/cves/:cveId/watch-product", async (req, res) => {
 
     await store.addWatchedProduct(defaultUserId, {
       product_id: productId,
-      product_name: product.product_name,
-      vendor_name: product.vendor_name
+      product_name: product.product_name || "",
+      vendor_name: product.vendor_name || ""
     });
 
     res.json({ ok: true, product_id: productId });

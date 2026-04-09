@@ -45,40 +45,56 @@ function firstWeakness(weaknesses = []) {
   return null;
 }
 
-function flattenCpeMatches(input, bucket = []) {
-  if (!input || typeof input !== "object") {
+function collectCpeMatches(input, bucket = []) {
+  if (!input) return bucket;
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      collectCpeMatches(item, bucket);
+    }
+    return bucket;
+  }
+  if (typeof input !== "object") {
     return bucket;
   }
 
-  const directMatches = []
-    .concat(Array.isArray(input.cpeMatch) ? input.cpeMatch : [])
-    .concat(Array.isArray(input.cpe_match) ? input.cpe_match : []);
-
-  for (const match of directMatches) {
-    bucket.push(match);
+  const criteria = input.criteria || input.cpe23Uri || "";
+  if (criteria) {
+    bucket.push(input);
   }
 
-  for (const key of ["nodes", "children", "configurations"]) {
-    if (Array.isArray(input[key])) {
-      for (const child of input[key]) {
-        flattenCpeMatches(child, bucket);
-      }
+  for (const value of Object.values(input)) {
+    if (value && typeof value === "object") {
+      collectCpeMatches(value, bucket);
     }
   }
-
   return bucket;
+}
+
+function cleanCpePart(value, fallback) {
+  const cleaned = String(value || "").trim().replace(/_/g, " ");
+  if (!cleaned || cleaned === "*" || cleaned === "-") return fallback;
+  return cleaned;
 }
 
 function parseCpeParts(cpeUri) {
   const parts = String(cpeUri || "").split(":");
   return {
-    vendor: parts[3] ? parts[3].replace(/_/g, " ") : "unknown",
-    product: parts[4] ? parts[4].replace(/_/g, " ") : "unknown"
+    vendor: cleanCpePart(parts[3], "Unknown vendor"),
+    product: cleanCpePart(parts[4], "Unknown product")
   };
 }
 
-function normalizeSeverity(value) {
-  return String(value || "").trim().toUpperCase() || null;
+function normalizeSeverity(value, score) {
+  const direct = String(value || "").trim().toUpperCase();
+  if (direct) return direct;
+  if (score === null || score === undefined || Number.isNaN(Number(score))) return null;
+  const numeric = Number(score);
+  if (numeric >= 9.0) return "CRITICAL";
+  if (numeric >= 7.0) return "HIGH";
+  if (numeric >= 4.0) return "MEDIUM";
+  if (numeric > 0) return "LOW";
+  if (numeric === 0) return "NONE";
+  return null;
 }
 
 function buildWindowParams({ windowType, startIso, endIso }) {
@@ -118,8 +134,7 @@ function parseCveRecord(wrapper) {
   const cvssData = metric?.cvssData || {};
   const weaknessName = firstWeakness(cve.weaknesses || []);
   const weaknessIdMatch = String(weaknessName || "").match(/CWE-\d+/i);
-  const configurations = Array.isArray(cve.configurations) ? cve.configurations : [];
-  const cpeMatches = flattenCpeMatches({ configurations });
+  const cpeMatches = collectCpeMatches(cve.configurations || []);
   const productMap = new Map();
 
   for (const match of cpeMatches) {
@@ -153,7 +168,8 @@ function parseCveRecord(wrapper) {
     });
   }
 
-  const severity = normalizeSeverity(metric?.baseSeverity || cvssData.baseSeverity);
+  const score = cvssData.baseScore ?? null;
+  const severity = normalizeSeverity(metric?.baseSeverity || cvssData.baseSeverity, score);
   const publishedAt = cve.published || new Date().toISOString();
 
   return {
@@ -164,7 +180,7 @@ function parseCveRecord(wrapper) {
     vuln_status: cve.vulnStatus || null,
     description: firstEnglishDescription(cve.descriptions || []),
     cvss_version: cvssData.version || null,
-    cvss_base_score: cvssData.baseScore ?? null,
+    cvss_base_score: score,
     severity,
     attack_vector: cvssData.attackVector || null,
     attack_complexity: cvssData.attackComplexity || null,
@@ -185,7 +201,6 @@ function parseCveRecord(wrapper) {
     references
   };
 }
-
 async function refreshAnalytics(client) {
   await client.query(`
     UPDATE cves
