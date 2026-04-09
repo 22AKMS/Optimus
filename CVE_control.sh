@@ -16,8 +16,23 @@ ANALYTICS_FUNCTION="${ANALYTICS_FUNCTION:-refreshTrendAnalytics}"
 LOCAL_PORT="${PORT:-8080}"
 DEFAULT_SYNC_DAYS="${DEFAULT_SYNC_DAYS:-7}"
 DEFAULT_MAX_RECORDS="${DEFAULT_MAX_RECORDS:-250}"
+MAX_SYNC_DAYS="${MAX_SYNC_DAYS:-30}"
 
 say() { printf '\n%s\n' "$*"; }
+
+validate_positive_integer() {
+  local value="$1"
+  local label="$2"
+  [[ "$value" =~ ^[0-9]+$ ]] || { say "Invalid $label: $value"; return 1; }
+  (( value >= 1 )) || { say "$label must be at least 1."; return 1; }
+}
+
+validate_nonnegative_integer() {
+  local value="$1"
+  local label="$2"
+  [[ "$value" =~ ^[0-9]+$ ]] || { say "Invalid $label: $value"; return 1; }
+  (( value >= 0 )) || { say "$label cannot be negative."; return 1; }
+}
 
 load_config() {
   SYNC_DAYS="$DEFAULT_SYNC_DAYS"
@@ -26,8 +41,11 @@ load_config() {
     # shellcheck disable=SC1090
     source "$CONFIG_FILE"
   fi
-  validate_positive_integer "$SYNC_DAYS" "sync days" >/dev/null
-  validate_positive_integer "$SYNC_MAX_RECORDS" "max records" >/dev/null
+  validate_positive_integer "$SYNC_DAYS" "sync days" >/dev/null || SYNC_DAYS="$DEFAULT_SYNC_DAYS"
+  validate_nonnegative_integer "$SYNC_MAX_RECORDS" "max records" >/dev/null || SYNC_MAX_RECORDS="$DEFAULT_MAX_RECORDS"
+  if (( SYNC_DAYS > MAX_SYNC_DAYS )); then
+    SYNC_DAYS="$MAX_SYNC_DAYS"
+  fi
 }
 
 save_config() {
@@ -37,16 +55,13 @@ SYNC_MAX_RECORDS=$SYNC_MAX_RECORDS
 CFG
 }
 
-validate_positive_integer() {
-  local value="$1"
-  local label="$2"
-  [[ "$value" =~ ^[0-9]+$ ]] || { say "Invalid $label: $value"; return 1; }
-  (( value >= 1 )) || { say "$label must be at least 1."; return 1; }
-}
-
 set_sync_days() {
   local value="$1"
   validate_positive_integer "$value" "sync days" || return 1
+  if (( value > MAX_SYNC_DAYS )); then
+    say "Sync days cannot exceed $MAX_SYNC_DAYS to keep NVD pulls bounded."
+    return 1
+  fi
   SYNC_DAYS="$value"
   save_config
   say "Default sync window set to $SYNC_DAYS day(s)."
@@ -54,20 +69,24 @@ set_sync_days() {
 
 set_sync_max_records() {
   local value="$1"
-  validate_positive_integer "$value" "max CVEs" || return 1
-  if (( value > 1000 )); then
-    say "Max CVEs cannot exceed 1000 because the sync function caps max_records at 1000."
-    return 1
-  fi
+  validate_nonnegative_integer "$value" "max CVEs" || return 1
   SYNC_MAX_RECORDS="$value"
   save_config
-  say "Default max CVEs per sync set to $SYNC_MAX_RECORDS."
+  if (( value == 0 )); then
+    say "Default max CVEs per sync set to 0 (pull the full selected day window, up to $MAX_SYNC_DAYS days)."
+  else
+    say "Default max CVEs per sync set to $SYNC_MAX_RECORDS."
+  fi
 }
 
 show_sync_config() {
   load_config
-  say "Sync window days: $SYNC_DAYS"
-  say "Max CVEs per sync: $SYNC_MAX_RECORDS"
+  say "Sync window days: $SYNC_DAYS (max $MAX_SYNC_DAYS)"
+  if (( SYNC_MAX_RECORDS == 0 )); then
+    say "Max CVEs per sync: 0 (full selected day window)"
+  else
+    say "Max CVEs per sync: $SYNC_MAX_RECORDS"
+  fi
 }
 
 require_cloud_project() {
@@ -172,15 +191,19 @@ trigger_sync() {
   local days="${1:-$SYNC_DAYS}"
   local max_records="${2:-$SYNC_MAX_RECORDS}"
   validate_positive_integer "$days" "sync days" || return 1
-  validate_positive_integer "$max_records" "max CVEs" || return 1
-  if (( max_records > 1000 )); then
-    say "Max CVEs cannot exceed 1000 because the sync function caps max_records at 1000."
+  if (( days > MAX_SYNC_DAYS )); then
+    say "Sync days cannot exceed $MAX_SYNC_DAYS to keep NVD pulls bounded."
     return 1
   fi
+  validate_nonnegative_integer "$max_records" "max CVEs" || return 1
   local url
   url="$(function_url "$SYNC_FUNCTION")"
   [[ -n "$url" ]] || { say "Could not find function URL for $SYNC_FUNCTION."; return 1; }
-  say "Triggering $SYNC_FUNCTION for the last $days day(s), up to $max_records CVEs..."
+  if (( max_records == 0 )); then
+    say "Triggering $SYNC_FUNCTION for the full last $days day(s) window..."
+  else
+    say "Triggering $SYNC_FUNCTION for the last $days day(s), up to $max_records CVEs..."
+  fi
   curl -sS -X POST "$url" \
     -H 'Content-Type: application/json' \
     -d "{\"days\":$days,\"max_records\":$max_records}" && echo
@@ -229,7 +252,7 @@ case "${1:-}" in
   sync) trigger_sync "${2:-}" "${3:-}"; exit 0 ;;
   analytics) trigger_analytics; exit 0 ;;
   set-days) [[ -n "${2:-}" ]] || { say "Usage: ./CVE_control.sh set-days <days>"; exit 1; }; set_sync_days "$2"; exit 0 ;;
-  set-max-records) [[ -n "${2:-}" ]] || { say "Usage: ./CVE_control.sh set-max-records <count>"; exit 1; }; set_sync_max_records "$2"; exit 0 ;;
+  set-max-records) [[ -n "${2:-}" ]] || { say "Usage: ./CVE_control.sh set-max-records <count|0>"; exit 1; }; set_sync_max_records "$2"; exit 0 ;;
   config) show_sync_config; exit 0 ;;
 esac
 
@@ -245,11 +268,11 @@ while true; do
     6) tail_cloud_logs ;;
     7) trigger_sync ;;
     8)
-      read -r -p 'Enter sync window days: ' value
+      read -r -p 'Enter sync window days (1-30): ' value
       set_sync_days "$value"
       ;;
     9)
-      read -r -p 'Enter max CVEs per sync (1-1000): ' value
+      read -r -p 'Enter max CVEs per sync (0 = full day window): ' value
       set_sync_max_records "$value"
       ;;
     10) show_sync_config ;;

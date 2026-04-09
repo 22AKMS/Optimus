@@ -38,6 +38,53 @@ function safeUrl(url) {
   return /^https?:\/\//i.test(value) ? value : "#";
 }
 
+function isKnownValue(value) {
+  const normalized = String(value || "").trim();
+  return normalized && !/^unknown\b/i.test(normalized);
+}
+
+function humanizeMetric(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  return normalized
+    .toLowerCase()
+    .split(/[\s_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function interactionLabel(value) {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (!normalized) return "";
+  if (normalized === "NONE") return "No user interaction";
+  if (normalized === "REQUIRED") return "User interaction required";
+  return `${humanizeMetric(normalized)} user interaction`;
+}
+
+function exploitSummary(cve) {
+  const parts = [];
+  if (cve.has_kev) parts.push("Known exploited");
+  if (isKnownValue(cve.cwe_id)) parts.push(String(cve.cwe_id).trim().toUpperCase());
+  if (isKnownValue(cve.attack_vector)) parts.push(humanizeMetric(cve.attack_vector));
+  const interaction = interactionLabel(cve.user_interaction);
+  if (interaction) parts.push(interaction);
+  if (!parts.length && isKnownValue(cve.vuln_status)) {
+    parts.push(humanizeMetric(cve.vuln_status));
+  }
+  return parts.slice(0, 3).join(" · ") || "Structured product data pending";
+}
+
+function targetLabel(cve) {
+  const parts = [cve.primary_vendor, cve.primary_product]
+    .map((value) => String(value || "").trim())
+    .filter(isKnownValue);
+
+  if (parts.length === 2) return `${parts[0]} · ${parts[1]}`;
+  if (parts.length === 1) return parts[0];
+  return exploitSummary(cve);
+}
+
 function showToast(message, variant = "success") {
   const toast = document.getElementById("actionToast");
   if (!toast) return;
@@ -52,14 +99,17 @@ function showToast(message, variant = "success") {
 function renderHero(data) {
   const hero = document.getElementById("cveHero");
   const watchDisabled = !data.primary_product_id;
+  const eyebrow = isKnownValue(data.primary_vendor) ? String(data.primary_vendor).trim() : "Exploit context";
+  const contextLine = targetLabel(data);
+  const statusText = isKnownValue(data.vuln_status) ? humanizeMetric(data.vuln_status) : "Status pending";
 
   hero.innerHTML = `
     <div class="stack">
       <div class="section-title-row compact-row hero-title-row">
         <div>
-          <p class="eyebrow">${escapeHtml(data.primary_vendor || "Unknown vendor")}</p>
+          <p class="eyebrow">${escapeHtml(eyebrow)}</p>
           <h1>${escapeHtml(data.id)}</h1>
-          <p class="muted compact">${escapeHtml(data.primary_product || "Unknown product")} · ${escapeHtml(data.vuln_status || "Unknown status")}</p>
+          <p class="muted compact">${escapeHtml(contextLine)} · ${escapeHtml(statusText)}</p>
         </div>
         <span class="badge ${severityClass(data.severity)}">${escapeHtml(data.severity || "UNKNOWN")}</span>
       </div>
@@ -149,11 +199,11 @@ function renderRelated(items) {
 
   target.innerHTML = items.map((item) => `
     <a class="card-link mini-card" href="/cves/${encodeURIComponent(item.id)}">
-      <div class="section-title-row compact-row">
-        <strong>${escapeHtml(item.id)}</strong>
-        <span class="badge ${severityClass(item.severity)}">${escapeHtml(item.severity || "UNKNOWN")}</span>
+      <div class="cve-card-header">
+        <strong class="cve-card-title">${escapeHtml(item.id)}</strong>
+        <span class="badge cve-card-badge ${severityClass(item.severity)}">${escapeHtml(item.severity || "UNKNOWN")}</span>
       </div>
-      <div class="muted compact">${escapeHtml(item.primary_vendor || "Unknown vendor")} · ${escapeHtml(item.primary_product || "Unknown product")}</div>
+      <div class="muted compact">${escapeHtml(targetLabel(item))}</div>
       <div class="badge-row left-align">
         <span class="badge">CVSS ${escapeHtml(scoreLabel(item.cvss_base_score))}</span>
         <span class="badge">${escapeHtml(new Date(item.published_at).toLocaleDateString())}</span>

@@ -35,16 +35,63 @@ function scoreLabel(score) {
   return score === null || score === undefined ? "N/A" : Number(score).toFixed(1);
 }
 
+function isKnownValue(value) {
+  const normalized = String(value || "").trim();
+  return normalized && !/^unknown\b/i.test(normalized);
+}
+
+function humanizeMetric(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  return normalized
+    .toLowerCase()
+    .split(/[\s_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function interactionLabel(value) {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (!normalized) return "";
+  if (normalized === "NONE") return "No user interaction";
+  if (normalized === "REQUIRED") return "User interaction required";
+  return `${humanizeMetric(normalized)} user interaction`;
+}
+
+function exploitSummary(cve) {
+  const parts = [];
+  if (cve.has_kev) parts.push("Known exploited");
+  if (isKnownValue(cve.cwe_id)) parts.push(String(cve.cwe_id).trim().toUpperCase());
+  if (isKnownValue(cve.attack_vector)) parts.push(humanizeMetric(cve.attack_vector));
+  const interaction = interactionLabel(cve.user_interaction);
+  if (interaction) parts.push(interaction);
+  if (!parts.length && isKnownValue(cve.vuln_status)) {
+    parts.push(humanizeMetric(cve.vuln_status));
+  }
+  return parts.slice(0, 3).join(" · ") || "Structured product data pending";
+}
+
+function targetLabel(cve) {
+  const parts = [cve.primary_vendor, cve.primary_product]
+    .map((value) => String(value || "").trim())
+    .filter(isKnownValue);
+
+  if (parts.length === 2) return `${parts[0]} · ${parts[1]}`;
+  if (parts.length === 1) return parts[0];
+  return exploitSummary(cve);
+}
+
 function cveCard(cve) {
   return `
     <article class="item-card">
       <div class="item-card-body stack tight">
         <div>
-          <div class="section-title-row compact-row">
-            <h3>${escapeHtml(cve.id)}</h3>
-            <span class="badge ${severityClass(cve.severity)}">${escapeHtml(cve.severity || "UNKNOWN")}</span>
+          <div class="cve-card-header">
+            <h3 class="cve-card-title">${escapeHtml(cve.id)}</h3>
+            <span class="badge cve-card-badge ${severityClass(cve.severity)}">${escapeHtml(cve.severity || "UNKNOWN")}</span>
           </div>
-          <p class="muted compact">${escapeHtml(cve.primary_vendor || "Unknown vendor")} · ${escapeHtml(cve.primary_product || "Unknown product")}</p>
+          <p class="muted compact">${escapeHtml(targetLabel(cve))}</p>
         </div>
         <p>${escapeHtml(excerpt(cve.description))}</p>
         <div class="badge-row left-align">

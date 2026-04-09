@@ -132,6 +132,10 @@ code {
   grid-template-columns: 1.5fr 1.15fr 0.9fr 0.8fr 1fr auto;
 }
 
+.controls-with-direction {
+  grid-template-columns: 1.5fr 1.15fr 0.9fr 0.8fr 1fr 0.8fr auto;
+}
+
 input, select, textarea, button {
   font: inherit;
 }
@@ -215,6 +219,25 @@ button:disabled {
 
 .item-card-body {
   padding: 1rem;
+}
+
+.cve-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 2.8rem;
+}
+
+.cve-card-title {
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cve-card-badge {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .stack {
@@ -427,4 +450,36 @@ button:disabled {
 
 .toast.error {
   background: #991b1b;
+}
+
+
+.pagination-controls {
+  margin-top: 1rem;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.pagination-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.pagination-button {
+  min-width: 44px;
+  padding: 0.65rem 0.9rem;
+}
+
+.pagination-button.active {
+  background: white;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.pagination-ellipsis {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.2rem;
+  color: var(--muted);
 }

@@ -1,7 +1,15 @@
 const state = {
   cves: [],
   severities: ["CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE", "UNKNOWN"],
-  years: []
+  years: [],
+  pagination: {
+    page: 1,
+    limit: 40,
+    page_count: 1,
+    total_items: 0,
+    has_prev: false,
+    has_next: false
+  }
 };
 
 async function fetchJson(url, options = {}) {
@@ -41,6 +49,53 @@ function scoreLabel(score) {
   return score === null || score === undefined ? "N/A" : Number(score).toFixed(1);
 }
 
+function isKnownValue(value) {
+  const normalized = String(value || "").trim();
+  return normalized && !/^unknown\b/i.test(normalized);
+}
+
+function humanizeMetric(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  return normalized
+    .toLowerCase()
+    .split(/[\s_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function interactionLabel(value) {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (!normalized) return "";
+  if (normalized === "NONE") return "No user interaction";
+  if (normalized === "REQUIRED") return "User interaction required";
+  return `${humanizeMetric(normalized)} user interaction`;
+}
+
+function exploitSummary(cve) {
+  const parts = [];
+  if (cve.has_kev) parts.push("Known exploited");
+  if (isKnownValue(cve.cwe_id)) parts.push(String(cve.cwe_id).trim().toUpperCase());
+  if (isKnownValue(cve.attack_vector)) parts.push(humanizeMetric(cve.attack_vector));
+  const interaction = interactionLabel(cve.user_interaction);
+  if (interaction) parts.push(interaction);
+  if (!parts.length && isKnownValue(cve.vuln_status)) {
+    parts.push(humanizeMetric(cve.vuln_status));
+  }
+  return parts.slice(0, 3).join(" · ") || "Structured product data pending";
+}
+
+function targetLabel(cve) {
+  const parts = [cve.primary_vendor, cve.primary_product]
+    .map((value) => String(value || "").trim())
+    .filter(isKnownValue);
+
+  if (parts.length === 2) return `${parts[0]} · ${parts[1]}`;
+  if (parts.length === 1) return parts[0];
+  return exploitSummary(cve);
+}
+
 function statCard(label, value, detail = "") {
   return `
     <article class="panel stat-card">
@@ -57,11 +112,11 @@ function cveCard(cve) {
     <article class="item-card">
       <div class="item-card-body stack tight">
         <div>
-          <div class="section-title-row compact-row">
-            <h3>${escapeHtml(cve.id)}</h3>
-            <span class="badge ${severityClass(severity)}">${escapeHtml(severity)}</span>
+          <div class="cve-card-header">
+            <h3 class="cve-card-title">${escapeHtml(cve.id)}</h3>
+            <span class="badge cve-card-badge ${severityClass(severity)}">${escapeHtml(severity)}</span>
           </div>
-          <p class="muted compact">${escapeHtml(cve.primary_vendor || "Unknown vendor")} · ${escapeHtml(cve.primary_product || "Unknown product")}</p>
+          <p class="muted compact">${escapeHtml(targetLabel(cve))}</p>
         </div>
         <p>${escapeHtml(excerpt(cve.description))}</p>
         <div class="badge-row left-align">
@@ -80,11 +135,11 @@ function highSeverityCard(cve) {
   const severity = cve.severity || "UNKNOWN";
   return `
     <a class="card-link mini-card" href="/cves/${encodeURIComponent(cve.id)}">
-      <div class="section-title-row compact-row">
-        <strong>${escapeHtml(cve.id)}</strong>
-        <span class="badge ${severityClass(severity)}">${escapeHtml(severity)}</span>
+      <div class="cve-card-header">
+        <strong class="cve-card-title">${escapeHtml(cve.id)}</strong>
+        <span class="badge cve-card-badge ${severityClass(severity)}">${escapeHtml(severity)}</span>
       </div>
-      <div class="muted compact">${escapeHtml(cve.primary_vendor || "Unknown vendor")} · ${escapeHtml(cve.primary_product || "Unknown product")}</div>
+      <div class="muted compact">${escapeHtml(targetLabel(cve))}</div>
       <div class="badge-row left-align">
         <span class="badge">CVSS ${escapeHtml(scoreLabel(cve.cvss_base_score))}</span>
         <span class="badge">${escapeHtml(formatDate(cve.published_at))}</span>
@@ -129,7 +184,10 @@ function renderFilters(selectedSeverity = "", selectedYear = "") {
 function renderCves() {
   const grid = document.getElementById("cveGrid");
   const count = document.getElementById("cveCount");
-  count.textContent = `${state.cves.length} result(s)`;
+  const { page, limit, total_items: totalItems } = state.pagination;
+  const start = totalItems ? ((page - 1) * limit) + 1 : 0;
+  const end = totalItems ? Math.min(page * limit, totalItems) : 0;
+  count.textContent = totalItems ? `${start}-${end} of ${totalItems}` : "0 results";
 
   if (!state.cves.length) {
     grid.innerHTML = '<div class="panel empty-state">No CVEs matched your filters. Try a broader search or run a fresh NVD sync.</div>';
@@ -139,26 +197,111 @@ function renderCves() {
   grid.innerHTML = state.cves.map(cveCard).join("");
 }
 
-async function loadCves() {
-  const search = document.getElementById("searchInput").value.trim();
-  const product = document.getElementById("productInput").value.trim();
-  const severity = document.getElementById("severitySelect").value;
-  const year = document.getElementById("yearSelect").value;
-  const sort = document.getElementById("sortSelect").value;
+function currentQueryState() {
+  return {
+    search: document.getElementById("searchInput").value.trim(),
+    product: document.getElementById("productInput").value.trim(),
+    severity: document.getElementById("severitySelect").value,
+    year: document.getElementById("yearSelect").value,
+    sort: document.getElementById("sortSelect").value,
+    direction: document.getElementById("directionSelect").value
+  };
+}
+
+function syncUrl(page = state.pagination.page || 1) {
+  const params = new URLSearchParams();
+  const filters = currentQueryState();
+
+  for (const [key, value] of Object.entries(filters)) {
+    if (value) params.set(key, value);
+  }
+
+  if (page > 1) params.set("page", String(page));
+  const query = params.toString();
+  const target = query ? `/?${query}` : "/";
+  window.history.replaceState({}, "", target);
+}
+
+function readInitialFilters() {
+  const params = new URLSearchParams(window.location.search);
+  const get = (name, fallback = "") => params.get(name) || fallback;
+
+  document.getElementById("searchInput").value = get("search");
+  document.getElementById("productInput").value = get("product");
+  document.getElementById("sortSelect").value = get("sort", "newest");
+  document.getElementById("directionSelect").value = get("direction", "desc");
+
+  return {
+    severity: get("severity"),
+    year: get("year"),
+    page: Math.max(Number(get("page", "1")), 1)
+  };
+}
+
+function renderPagination() {
+  const pagination = document.getElementById("paginationControls");
+  const { page, page_count: pageCount, has_prev: hasPrev, has_next: hasNext, total_items: totalItems } = state.pagination;
+
+  if (!totalItems || pageCount <= 1) {
+    pagination.innerHTML = "";
+    return;
+  }
+
+  const pages = new Set([1, pageCount, page - 1, page, page + 1].filter((value) => value >= 1 && value <= pageCount));
+  const orderedPages = Array.from(pages).sort((left, right) => left - right);
+  const buttons = [];
+  let previous = 0;
+
+  for (const value of orderedPages) {
+    if (previous && value - previous > 1) {
+      buttons.push('<span class="pagination-ellipsis">…</span>');
+    }
+    buttons.push(`
+      <button type="button" class="pagination-button ${value === page ? 'active' : ''}" data-page="${value}">${value}</button>
+    `);
+    previous = value;
+  }
+
+  pagination.innerHTML = `
+    <div class="pagination-summary muted">Page ${page} of ${pageCount}</div>
+    <div class="pagination-row">
+      <button type="button" class="pagination-button" data-page="${page - 1}" ${hasPrev ? "" : "disabled"}>← Previous</button>
+      ${buttons.join("")}
+      <button type="button" class="pagination-button" data-page="${page + 1}" ${hasNext ? "" : "disabled"}>Next →</button>
+    </div>
+  `;
+
+  pagination.querySelectorAll("button[data-page]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const targetPage = Number(button.dataset.page || page);
+      loadCves(targetPage).catch(console.error);
+      window.scrollTo({ top: document.getElementById("cveGrid").offsetTop - 140, behavior: "smooth" });
+    });
+  });
+}
+
+async function loadCves(page = 1) {
+  const filters = currentQueryState();
   const params = new URLSearchParams();
 
-  if (search) params.set("search", search);
-  if (product) params.set("product", product);
-  if (severity) params.set("severity", severity);
-  if (year) params.set("year", year);
-  if (sort) params.set("sort", sort);
+  if (filters.search) params.set("search", filters.search);
+  if (filters.product) params.set("product", filters.product);
+  if (filters.severity) params.set("severity", filters.severity);
+  if (filters.year) params.set("year", filters.year);
+  if (filters.sort) params.set("sort", filters.sort);
+  if (filters.direction) params.set("direction", filters.direction);
+  params.set("page", String(page));
+  params.set("limit", String(state.pagination.limit));
 
   const data = await fetchJson(`/api/cves?${params.toString()}`);
   state.cves = data.items || [];
   state.severities = data.severities || state.severities;
   state.years = data.years || [];
-  renderFilters(severity, year);
+  state.pagination = data.pagination || state.pagination;
+  renderFilters(filters.severity, filters.year);
   renderCves();
+  renderPagination();
+  syncUrl(state.pagination.page || page);
 }
 
 async function loadHighSeverity() {
@@ -179,19 +322,20 @@ async function loadOverview() {
 }
 
 document.getElementById("searchButton").addEventListener("click", () => {
-  loadCves().catch(console.error);
+  loadCves(1).catch(console.error);
 });
 
 for (const inputId of ["searchInput", "productInput"]) {
   document.getElementById(inputId).addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
-      loadCves().catch(console.error);
+      loadCves(1).catch(console.error);
     }
   });
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+  const initial = readInitialFilters();
   await loadOverview();
-  await loadCves();
+  await loadCves(initial.page || 1);
   await loadHighSeverity();
 });

@@ -245,13 +245,15 @@ async function fetchWindow({ startIso, endIso, windowType = "published", maxReco
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const now = new Date();
-  const days = Number(args.days || 30);
+  const requestedDays = Number(args.days || 30);
+  const days = Math.min(Math.max(requestedDays, 1), 30);
   const endIso = args['end-date'] || now.toISOString();
   const startIso = args['start-date'] || new Date(now.getTime() - (days * 24 * 60 * 60 * 1000)).toISOString();
   const windowType = String(args['window-type'] || process.env.DEFAULT_SYNC_WINDOW_TYPE || 'published').trim().toLowerCase() === 'modified' ? 'modified' : 'published';
-  const maxRecords = Number(args['max-records'] || 300);
-  const maxPages = Number(args['max-pages'] || 10);
-  const delayMs = Number(args['delay-ms'] || 6500);
+  const rawMaxRecords = Number(args['max-records'] ?? 300);
+  const maxRecords = rawMaxRecords === 0 ? Number.POSITIVE_INFINITY : rawMaxRecords;
+  const maxPages = rawMaxRecords === 0 ? Number.POSITIVE_INFINITY : Number(args['max-pages'] || 10);
+  const delayMs = Math.max(Number(args['delay-ms'] || 6500), 6000);
 
   const runStart = await pool.query(`
     INSERT INTO ingest_runs (status, note)

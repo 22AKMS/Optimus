@@ -110,3 +110,9 @@ Use `install_gcloud.sh` from the project root. It creates:
 ## Sync behavior
 
 The app now defaults to a **published-date** sync window and fetches the newest pages first, so capped syncs populate the homepage with the newest published CVEs instead of older CVEs that were only modified recently. To backfill modified older CVEs, call the sync function with `window_type=modified`.
+
+
+Sync behavior note:
+- In `CVE_control.sh`, setting max CVEs to `0` means “pull the full selected day window.”
+- The sync window is capped at 30 days to keep pulls bounded and friendly to NVD rate limits.
+- The sync code enforces at least a 6 second delay between paginated NVD requests.

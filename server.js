@@ -85,7 +85,10 @@ app.get("/api/cves", async (req, res) => {
     const product = String(req.query.product || "").trim();
     const yearRaw = String(req.query.year || "").trim();
     const sort = String(req.query.sort || "newest").trim();
+    const sortDirection = String(req.query.direction || "desc").trim().toLowerCase() === "asc" ? "asc" : "desc";
     const limit = Math.min(Math.max(Number(req.query.limit || 40), 1), 100);
+    const page = Math.max(Number(req.query.page || 1), 1);
+    const offset = (page - 1) * limit;
 
     const clauses = [];
     const params = [];
@@ -137,16 +140,40 @@ app.get("/api/cves", async (req, res) => {
       i += 1;
     }
 
-    const orderBy = {
-      newest: "c.published_at DESC, c.cvss_base_score DESC NULLS LAST, c.id DESC",
-      severity: `${severityOrderSql("c.severity", "c.cvss_base_score")} DESC, c.cvss_base_score DESC NULLS LAST, c.published_at DESC`,
-      modified: "c.last_modified_at DESC, c.published_at DESC, c.id DESC",
-      trending: "c.trending_score DESC, c.cvss_base_score DESC NULLS LAST, c.published_at DESC"
-    }[sort] || "c.published_at DESC, c.id DESC";
+    const orderByTemplates = {
+      newest: {
+        desc: "c.published_at DESC, c.cvss_base_score DESC NULLS LAST, c.id DESC",
+        asc: "c.published_at ASC, c.cvss_base_score ASC NULLS FIRST, c.id ASC"
+      },
+      severity: {
+        desc: `${severityOrderSql("c.severity", "c.cvss_base_score")} DESC, c.cvss_base_score DESC NULLS LAST, c.published_at DESC`,
+        asc: `${severityOrderSql("c.severity", "c.cvss_base_score")} ASC, c.cvss_base_score ASC NULLS FIRST, c.published_at ASC`
+      },
+      modified: {
+        desc: "c.last_modified_at DESC, c.published_at DESC, c.id DESC",
+        asc: "c.last_modified_at ASC, c.published_at ASC, c.id ASC"
+      },
+      trending: {
+        desc: "c.trending_score DESC, c.cvss_base_score DESC NULLS LAST, c.published_at DESC",
+        asc: "c.trending_score ASC, c.cvss_base_score ASC NULLS FIRST, c.published_at ASC"
+      }
+    };
 
+    const orderConfig = orderByTemplates[sort] || orderByTemplates.newest;
+    const orderBy = orderConfig[sortDirection];
     const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-    params.push(limit);
 
+    const countResult = await query(`
+      SELECT COUNT(*)::int AS total
+      FROM cves c
+      ${whereSql}
+    `, params);
+    const totalItems = Number(countResult.rows[0]?.total || 0);
+    const pageCount = Math.max(Math.ceil(totalItems / limit), 1);
+    const safePage = Math.min(page, pageCount);
+    const safeOffset = (safePage - 1) * limit;
+
+    const itemParams = [...params, limit, safeOffset];
     const itemsResult = await query(`
       SELECT
         c.*,
@@ -169,8 +196,9 @@ app.get("/api/cves", async (req, res) => {
       ) primary_match ON TRUE
       ${whereSql}
       ORDER BY ${orderBy}
-      LIMIT $${params.length}
-    `, params);
+      LIMIT $${itemParams.length - 1}
+      OFFSET $${itemParams.length}
+    `, itemParams);
 
     const yearsResult = await query(`
       SELECT DISTINCT year
@@ -184,7 +212,17 @@ app.get("/api/cves", async (req, res) => {
     res.json({
       items: itemsResult.rows.map(serializeCve),
       years: yearsResult.rows.map((row) => Number(row.year)).filter(Boolean),
-      severities
+      severities,
+      pagination: {
+        page: safePage,
+        limit,
+        page_count: pageCount,
+        total_items: totalItems,
+        has_prev: safePage > 1,
+        has_next: safePage < pageCount
+      },
+      sort,
+      direction: sortDirection
     });
   } catch (error) {
     res.status(500).json({ error: error.message });

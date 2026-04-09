@@ -387,10 +387,14 @@ async function upsertCveRecord(client, record) {
 }
 
 exports.syncRecentCves = async (req, res) => {
-  const days = Math.max(1, Number(req.body?.days || req.query.days || process.env.DEFAULT_SYNC_WINDOW_DAYS || 7));
-  const maxRecords = Math.min(Math.max(Number(req.body?.max_records || req.query.max_records || 250), 1), 1000);
-  const maxPages = Math.min(Math.max(Number(req.body?.max_pages || req.query.max_pages || 10), 1), 20);
-  const delayMs = Math.max(1000, Number(req.body?.delay_ms || req.query.delay_ms || 6500));
+  const requestedDays = Number(req.body?.days || req.query.days || process.env.DEFAULT_SYNC_WINDOW_DAYS || 7);
+  const days = Math.min(Math.max(requestedDays, 1), 30);
+  const rawMaxRecords = Number(req.body?.max_records ?? req.query.max_records ?? 250);
+  const unlimitedWindow = rawMaxRecords === 0;
+  const maxRecords = unlimitedWindow ? Number.POSITIVE_INFINITY : Math.min(Math.max(rawMaxRecords, 1), 1000);
+  const requestedMaxPages = Number(req.body?.max_pages || req.query.max_pages || 10);
+  const maxPages = unlimitedWindow ? Number.POSITIVE_INFINITY : Math.min(Math.max(requestedMaxPages, 1), 20);
+  const delayMs = Math.max(6000, Number(req.body?.delay_ms || req.query.delay_ms || 6500));
   const requestedWindowType = String(req.body?.window_type || req.query.window_type || process.env.DEFAULT_SYNC_WINDOW_TYPE || "published").trim().toLowerCase();
   const windowType = requestedWindowType === "modified" ? "modified" : "published";
 
@@ -404,7 +408,7 @@ exports.syncRecentCves = async (req, res) => {
     INSERT INTO ingest_runs (status, note)
     VALUES ('running', $1)
     RETURNING id
-  `, [`Syncing NVD CVEs using ${windowType} window from ${startIso} to ${endIso}`]);
+  `, [`Syncing NVD CVEs using ${windowType} window from ${startIso} to ${endIso}${unlimitedWindow ? " (full window)" : ""}`]);
   const runId = runResult.rows[0].id;
 
   try {
@@ -462,9 +466,9 @@ exports.syncRecentCves = async (req, res) => {
       UPDATE ingest_runs
       SET finished_at = NOW(), status = 'success', cve_count = $2, note = $3
       WHERE id = $1
-    `, [runId, records.length, `Synced ${records.length} CVEs.`]);
+    `, [runId, records.length, `Synced ${records.length} CVEs${unlimitedWindow ? " from the full selected day window" : ""}.`]);
 
-    res.json({ ok: true, synced: records.length, start_date: startIso, end_date: endIso });
+    res.json({ ok: true, synced: records.length, start_date: startIso, end_date: endIso, full_window: unlimitedWindow, days });
   } catch (error) {
     await pool.query(`
       UPDATE ingest_runs
