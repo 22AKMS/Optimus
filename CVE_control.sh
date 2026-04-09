@@ -83,7 +83,7 @@ local_running() {
 
 start_local() {
   if local_running; then
-    say "Local CVE Analyzer is already running on PID $(cat "$PID_FILE")."
+    say "Local Optimus is already running on PID $(cat "$PID_FILE")."
     return
   fi
   say "Starting local CVE Analyzer on port $LOCAL_PORT..."
@@ -101,7 +101,7 @@ start_local() {
 
 stop_local() {
   if ! local_running; then
-    say "Local CVE Analyzer is not running."
+    say "Local Optimus is not running."
     rm -f "$PID_FILE"
     return
   fi
@@ -114,10 +114,10 @@ stop_local() {
 
 local_status() {
   if local_running; then
-    say "Local CVE Analyzer is running on PID $(cat "$PID_FILE")."
+    say "Local Optimus is running on PID $(cat "$PID_FILE")."
     say "URL: http://localhost:$LOCAL_PORT"
   else
-    say "Local CVE Analyzer is not running."
+    say "Local Optimus is not running."
   fi
 }
 
@@ -198,7 +198,7 @@ trigger_analytics() {
 show_menu() {
   cat <<'MENU'
 
-CVE Analyzer control panel
+Optimus control panel
 1) Start local app
 2) Stop local app
 3) Local status

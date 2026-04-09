@@ -1,4 +1,4 @@
-# CVE Analyzer
+# Optimus - A CVE Analysis Optimizer
 
 A Google Cloud web application that ingests CVE records from the National Vulnerability Database (NVD), stores normalized vulnerability data in Cloud SQL for PostgreSQL, stores per-user saved state in Firestore, and exposes Looker Studio-friendly views for trend dashboards.
 

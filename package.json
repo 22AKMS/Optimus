@@ -1,7 +1,7 @@
 {
   "name": "cve-analyzer",
   "version": "1.0.0",
-  "description": "CVE analyzer for Google Cloud Run, Cloud SQL for PostgreSQL, Firestore, Cloud Functions, and Looker Studio.",
+  "description": "Optimus - A CVE Analysis Optimizer for Google Cloud Run, Cloud SQL for PostgreSQL, Firestore, Cloud Functions, and Looker Studio.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

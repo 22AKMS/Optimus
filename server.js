@@ -10,7 +10,7 @@ const { UserStateStore } = require("./lib/firestoreStore");
 const app = express();
 const port = Number(process.env.PORT || 8080);
 const defaultUserId = process.env.APP_USER_ID || "demo-user";
-const appName = process.env.APP_NAME || "CVE Analyzer";
+const appName = process.env.APP_NAME || "Optimus - A CVE Analysis Optimizer";
 const sourceNotice = process.env.SOURCE_NOTICE || "This product uses data from the NVD API but is not endorsed or certified by the NVD.";
 const store = new UserStateStore();
 

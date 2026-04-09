@@ -220,7 +220,7 @@ DB_HOST=127.0.0.1 DB_PORT="$PROXY_PORT" DB_USER="$DB_USER" DB_NAME="$DB_NAME" DB
 log "Ensuring service account exists"
 SA_EMAIL="${APP_SA}@${PROJECT_ID}.iam.gserviceaccount.com"
 if ! gcloud iam service-accounts describe "$SA_EMAIL" --project "$PROJECT_ID" >/dev/null 2>&1; then
-  gcloud iam service-accounts create "$APP_SA" --project "$PROJECT_ID" --display-name="CVE Analyzer service account" >/dev/null
+  gcloud iam service-accounts create "$APP_SA" --project "$PROJECT_ID" --display-name="Optimus service account" >/dev/null
   wait_for_service_account "$SA_EMAIL" || fail "Service account $SA_EMAIL did not become available in time."
 fi
 
@@ -236,7 +236,7 @@ gcloud run deploy "$APP_SERVICE" \
   --allow-unauthenticated \
   --service-account "$SA_EMAIL" \
   --add-cloudsql-instances "$INSTANCE_CONNECTION_NAME" \
-  --set-env-vars "APP_NAME=CVE Analyzer,APP_USER_ID=$APP_USER_ID,FIRESTORE_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=$FIRESTORE_DB,INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,NVD_API_KEY=$NVD_API_KEY,DEFAULT_SYNC_WINDOW_TYPE=published"
+  --set-env-vars "APP_NAME=Optimus - A CVE Analysis Optimizer,APP_USER_ID=$APP_USER_ID,FIRESTORE_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=$FIRESTORE_DB,INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,NVD_API_KEY=$NVD_API_KEY,DEFAULT_SYNC_WINDOW_TYPE=published"
 
 log "Deploying function $SYNC_FUNCTION"
 gcloud functions deploy "$SYNC_FUNCTION" \
