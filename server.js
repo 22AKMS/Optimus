@@ -47,16 +47,14 @@ app.get("/api/analytics/overview", async (req, res) => {
       SELECT
         COUNT(*)::int AS total_cves,
         COUNT(*) FILTER (WHERE severity = 'CRITICAL')::int AS critical_cves,
+        COUNT(*) FILTER (WHERE severity = 'HIGH')::int AS high_cves,
         COUNT(*) FILTER (WHERE published_at >= NOW() - INTERVAL '30 days')::int AS recent_cves,
         COUNT(*) FILTER (WHERE has_kev)::int AS kev_cves,
-        MAX(published_at) AS latest_published_at
+        ROUND(AVG(cvss_base_score)::numeric, 1) AS avg_cvss,
+        MAX(cvss_base_score) AS max_cvss,
+        MAX(published_at) AS latest_published_at,
+        MAX(last_modified_at) AS latest_modified_at
       FROM cves
-    `);
-
-    const catalogResult = await query(`
-      SELECT
-        (SELECT COUNT(*)::int FROM vendors) AS vendor_count,
-        (SELECT COUNT(*)::int FROM products) AS product_count
     `);
 
     const latestRun = await query(`
@@ -68,7 +66,6 @@ app.get("/api/analytics/overview", async (req, res) => {
 
     res.json({
       overview: overviewResult.rows[0],
-      catalog: catalogResult.rows[0],
       latest_run: latestRun.rows[0] || null
     });
   } catch (error) {

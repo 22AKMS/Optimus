@@ -93,17 +93,15 @@ function highSeverityCard(cve) {
 
 function renderOverview(payload) {
   const overview = payload.overview || {};
-  const catalog = payload.catalog || {};
   const latestRun = payload.latest_run || null;
   const grid = document.getElementById("overviewGrid");
   const cards = [
-    statCard("Total CVEs", overview.total_cves || 0),
-    statCard("Critical CVEs", overview.critical_cves || 0),
-    statCard("Recent 30 Days", overview.recent_cves || 0),
-    statCard("Known Exploited", overview.kev_cves || 0),
-    statCard("Tracked Vendors", catalog.vendor_count || 0),
-    statCard("Tracked Products", catalog.product_count || 0),
-    statCard("Latest Publish Date", latestRun?.status === "success" && overview.latest_published_at ? formatDate(overview.latest_published_at) : (overview.latest_published_at ? formatDate(overview.latest_published_at) : "No data"), latestRun ? `Last sync: ${latestRun.status}` : "Run syncRecentCves after deploy")
+    statCard("Total CVEs", overview.total_cves || 0, `${overview.recent_cves || 0} published in the last 30 days`),
+    statCard("Critical CVEs", overview.critical_cves || 0, `${overview.high_cves || 0} high severity CVEs`),
+    statCard("Known Exploited", overview.kev_cves || 0, "CISA KEV-matched items"),
+    statCard("Average CVSS", scoreLabel(overview.avg_cvss), `Highest score ${scoreLabel(overview.max_cvss)}`),
+    statCard("Latest Publish Date", overview.latest_published_at ? formatDate(overview.latest_published_at) : "No data", latestRun ? `Last sync: ${latestRun.status}` : "Run syncRecentCves after deploy"),
+    statCard("Latest NVD Update", overview.latest_modified_at ? formatDate(overview.latest_modified_at) : "No data", "Most recently modified CVE in the catalog")
   ];
   grid.innerHTML = cards.join("");
 }
