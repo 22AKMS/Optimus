@@ -4,14 +4,19 @@
   <meta charset="utf-8">
   <title><%= appName %></title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/png" href="/static/favicon.png">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body data-user-id="<%= appUserId %>">
   <header class="page-header">
-    <div>
-      <p class="eyebrow"><%= appName %></p>
-      <h1>Optimus - A CVE Analysis Optimizer</h1>
-      <p class="header-copy"><%= sourceNotice %></p>
+    <div class="brand-lockup">
+      <img src="/static/logo.png" alt="Optimus logo" class="brand-mark">
+      <div>
+        <p class="eyebrow"><%= appName %></p>
+        <h1>Optimus - A CVE Analysis Optimizer</h1>
+        <p class="header-copy"><%= sourceNotice %></p>
+      </div>
     </div>
   </header>
 
