@@ -70,6 +70,143 @@ wait_for_service_account() {
   return 1
 }
 
+
+retry_name_prompt() {
+  local var_name="$1"
+  local label="$2"
+  local current_value="${!var_name}"
+  local new_value=""
+  while true; do
+    read -r -p "$label '$current_value' is unavailable. Enter a different name: " new_value || true
+    [[ -n "$new_value" ]] || { echo "Value is required."; continue; }
+    printf -v "$var_name" '%s' "$new_value"
+    return 0
+  done
+}
+
+run_or_capture() {
+  local __outvar="$1"
+  shift
+  local tmp_file
+  tmp_file="$(mktemp)"
+  if "$@" >"$tmp_file" 2>&1; then
+    printf -v "$__outvar" '%s' "$(cat "$tmp_file")"
+    rm -f "$tmp_file"
+    return 0
+  fi
+  printf -v "$__outvar" '%s' "$(cat "$tmp_file")"
+  rm -f "$tmp_file"
+  return 1
+}
+
+ensure_firestore_database() {
+  local output=""
+  while true; do
+    if gcloud firestore databases describe --project "$PROJECT_ID" --database="$FIRESTORE_DB" >/dev/null 2>&1; then
+      echo "Firestore database $FIRESTORE_DB already exists."
+      return 0
+    fi
+    if run_or_capture output gcloud firestore databases create \
+      --project "$PROJECT_ID" \
+      --database="$FIRESTORE_DB" \
+      --location="$REGION" \
+      --edition=standard \
+      --type=firestore-native; then
+      [[ -n "$output" ]] && echo "$output"
+      return 0
+    fi
+    echo "$output" >&2
+    retry_name_prompt FIRESTORE_DB "Firestore database ID"
+  done
+}
+
+ensure_sql_instance() {
+  local output=""
+  while true; do
+    if gcloud sql instances describe "$INSTANCE" --project "$PROJECT_ID" >/dev/null 2>&1; then
+      echo "Cloud SQL instance $INSTANCE already exists."
+      return 0
+    fi
+    if run_or_capture output gcloud sql instances create "$INSTANCE" \
+      --project "$PROJECT_ID" \
+      --database-version=POSTGRES_16 \
+      --edition=ENTERPRISE \
+      --cpu=1 \
+      --memory=3840MB \
+      --region="$REGION"; then
+      [[ -n "$output" ]] && echo "$output"
+      return 0
+    fi
+    echo "$output" >&2
+    retry_name_prompt INSTANCE "Cloud SQL instance name"
+  done
+}
+
+ensure_service_account_exists() {
+  local output=""
+  while true; do
+    SA_EMAIL="${APP_SA}@${PROJECT_ID}.iam.gserviceaccount.com"
+    if gcloud iam service-accounts describe "$SA_EMAIL" --project "$PROJECT_ID" >/dev/null 2>&1; then
+      echo "Service account $SA_EMAIL already exists."
+      return 0
+    fi
+    if run_or_capture output gcloud iam service-accounts create "$APP_SA" --project "$PROJECT_ID" --display-name="Optimus service account"; then
+      [[ -n "$output" ]] && echo "$output"
+      wait_for_service_account "$SA_EMAIL" || fail "Service account $SA_EMAIL did not become available in time."
+      return 0
+    fi
+    echo "$output" >&2
+    retry_name_prompt APP_SA "Service account name"
+  done
+}
+
+deploy_cloud_run_service() {
+  local output=""
+  while true; do
+    if run_or_capture output gcloud run deploy "$APP_SERVICE" \
+      --project "$PROJECT_ID" \
+      --source . \
+      --region "$REGION" \
+      --allow-unauthenticated \
+      --service-account "$SA_EMAIL" \
+      --add-cloudsql-instances "$INSTANCE_CONNECTION_NAME" \
+      --set-env-vars "APP_NAME=Optimus - A CVE Analysis Optimizer,APP_USER_ID=$APP_USER_ID,FIRESTORE_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=$FIRESTORE_DB,INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,NVD_API_KEY=$NVD_API_KEY,DEFAULT_SYNC_WINDOW_TYPE=published"; then
+      [[ -n "$output" ]] && echo "$output"
+      return 0
+    fi
+    echo "$output" >&2
+    retry_name_prompt APP_SERVICE "Cloud Run service name"
+  done
+}
+
+deploy_function_with_retry() {
+  local function_var_name="$1"
+  local source_dir="$2"
+  local entry_point="$3"
+  local env_vars="$4"
+  local display_label="$5"
+  local fn_name output
+  while true; do
+    fn_name="${!function_var_name}"
+    if run_or_capture output gcloud functions deploy "$fn_name" \
+      --project "$PROJECT_ID" \
+      --gen2 \
+      --runtime=nodejs22 \
+      --region="$REGION" \
+      --source="$source_dir" \
+      --entry-point="$entry_point" \
+      --trigger-http \
+      --allow-unauthenticated \
+      --service-account="$SA_EMAIL" \
+      --set-env-vars "$env_vars"; then
+      [[ -n "$output" ]] && echo "$output"
+      return 0
+    fi
+    echo "$output" >&2
+    retry_name_prompt "$function_var_name" "$display_label"
+  done
+}
+
 add_binding_if_missing() {
   local member="$1"
   local role="$2"
@@ -149,29 +286,10 @@ gcloud services enable \
   firestore.googleapis.com >/dev/null
 
 log "Ensuring Firestore database exists"
-if gcloud firestore databases describe --project "$PROJECT_ID" --database="$FIRESTORE_DB" >/dev/null 2>&1; then
-  echo "Firestore database $FIRESTORE_DB already exists."
-else
-  gcloud firestore databases create \
-    --project "$PROJECT_ID" \
-    --database="$FIRESTORE_DB" \
-    --location="$REGION" \
-    --edition=standard \
-    --type=firestore-native >/dev/null
-fi
+ensure_firestore_database
 
 log "Ensuring Cloud SQL instance exists"
-if gcloud sql instances describe "$INSTANCE" --project "$PROJECT_ID" >/dev/null 2>&1; then
-  echo "Cloud SQL instance $INSTANCE already exists."
-else
-  gcloud sql instances create "$INSTANCE" \
-    --project "$PROJECT_ID" \
-    --database-version=POSTGRES_16 \
-    --edition=ENTERPRISE \
-    --cpu=1 \
-    --memory=3840MB \
-    --region="$REGION"
-fi
+ensure_sql_instance
 
 log "Setting postgres admin password"
 gcloud sql users set-password postgres \
@@ -218,51 +336,20 @@ log "Performing initial NVD sync"
 DB_HOST=127.0.0.1 DB_PORT="$PROXY_PORT" DB_USER="$DB_USER" DB_NAME="$DB_NAME" DB_PASSWORD="$DB_PASSWORD" NVD_API_KEY="$NVD_API_KEY" DEFAULT_SYNC_WINDOW_TYPE=published node scripts/syncNvdToDb.js --days="$INITIAL_SYNC_DAYS" --window-type=published --max-records=300
 
 log "Ensuring service account exists"
-SA_EMAIL="${APP_SA}@${PROJECT_ID}.iam.gserviceaccount.com"
-if ! gcloud iam service-accounts describe "$SA_EMAIL" --project "$PROJECT_ID" >/dev/null 2>&1; then
-  gcloud iam service-accounts create "$APP_SA" --project "$PROJECT_ID" --display-name="Optimus service account" >/dev/null
-  wait_for_service_account "$SA_EMAIL" || fail "Service account $SA_EMAIL did not become available in time."
-fi
+ensure_service_account_exists
 
 log "Granting IAM roles"
 add_binding_if_missing "serviceAccount:$SA_EMAIL" "roles/cloudsql.client"
 add_binding_if_missing "serviceAccount:$SA_EMAIL" "roles/datastore.user"
 
 log "Deploying Cloud Run service"
-gcloud run deploy "$APP_SERVICE" \
-  --project "$PROJECT_ID" \
-  --source . \
-  --region "$REGION" \
-  --allow-unauthenticated \
-  --service-account "$SA_EMAIL" \
-  --add-cloudsql-instances "$INSTANCE_CONNECTION_NAME" \
-  --set-env-vars "APP_NAME=Optimus - A CVE Analysis Optimizer,APP_USER_ID=$APP_USER_ID,FIRESTORE_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=$FIRESTORE_DB,INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,NVD_API_KEY=$NVD_API_KEY,DEFAULT_SYNC_WINDOW_TYPE=published"
+deploy_cloud_run_service
 
 log "Deploying function $SYNC_FUNCTION"
-gcloud functions deploy "$SYNC_FUNCTION" \
-  --project "$PROJECT_ID" \
-  --gen2 \
-  --runtime=nodejs22 \
-  --region="$REGION" \
-  --source=functions/syncRecentCves \
-  --entry-point=syncRecentCves \
-  --trigger-http \
-  --allow-unauthenticated \
-  --service-account="$SA_EMAIL" \
-  --set-env-vars "INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,NVD_API_KEY=$NVD_API_KEY,DEFAULT_SYNC_WINDOW_TYPE=published"
+deploy_function_with_retry SYNC_FUNCTION "functions/syncRecentCves" "syncRecentCves" "INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,NVD_API_KEY=$NVD_API_KEY,DEFAULT_SYNC_WINDOW_TYPE=published" "Sync function name"
 
 log "Deploying function $ANALYTICS_FUNCTION"
-gcloud functions deploy "$ANALYTICS_FUNCTION" \
-  --project "$PROJECT_ID" \
-  --gen2 \
-  --runtime=nodejs22 \
-  --region="$REGION" \
-  --source=functions/refreshTrendAnalytics \
-  --entry-point=refreshTrendAnalytics \
-  --trigger-http \
-  --allow-unauthenticated \
-  --service-account="$SA_EMAIL" \
-  --set-env-vars "INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD"
+deploy_function_with_retry ANALYTICS_FUNCTION "functions/refreshTrendAnalytics" "refreshTrendAnalytics" "INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD" "Analytics function name"
 
 SYNC_RUN_SERVICE="$(gcloud functions describe "$SYNC_FUNCTION" --project "$PROJECT_ID" --gen2 --region "$REGION" --format='value(serviceConfig.service)' | awk -F/ '{print $NF}')"
 ANALYTICS_RUN_SERVICE="$(gcloud functions describe "$ANALYTICS_FUNCTION" --project "$PROJECT_ID" --gen2 --region "$REGION" --format='value(serviceConfig.service)' | awk -F/ '{print $NF}')"
