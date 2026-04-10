@@ -59,6 +59,19 @@ prompt_password() {
   done
 }
 
+prompt_project_id() {
+  local value=""
+  while true; do
+    read -r -p "Google Cloud project ID: " value || true
+    [[ -n "$value" ]] || { echo "Value is required."; continue; }
+    if gcloud projects describe "$value" >/dev/null 2>&1; then
+      PROJECT_ID="$value"
+      return 0
+    fi
+    echo "Project '$value' was not found or is not accessible with your current gcloud account."
+  done
+}
+
 wait_for_service_account() {
   local sa_email="$1"
   for attempt in 1 2 3 4 5 6 7 8 9 10; do
@@ -69,7 +82,6 @@ wait_for_service_account() {
   done
   return 1
 }
-
 
 retry_name_prompt() {
   local var_name="$1"
@@ -255,9 +267,8 @@ if [[ ! -f package.json || ! -d db || ! -d functions ]]; then
 fi
 
 CLOUD_SQL_PROXY_BIN="$(command -v cloud-sql-proxy || true)"
-DEFAULT_PROJECT="$(gcloud config get-value project 2>/dev/null || true)"
 
-prompt_default PROJECT_ID "Google Cloud project ID" "$DEFAULT_PROJECT"
+prompt_project_id
 prompt_default REGION "Region" "us-central1"
 prompt_default INSTANCE "Cloud SQL instance name" "cve-analyzer-sql"
 prompt_default DB_NAME "PostgreSQL database name" "cve_analyzer"

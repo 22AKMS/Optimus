@@ -17,22 +17,52 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
 }
 
+prompt_default() {
+  local var_name="$1"
+  local prompt_text="$2"
+  local default_value="${3:-}"
+  local value=""
+
+  while true; do
+    if [[ -n "$default_value" ]]; then
+      read -r -p "$prompt_text [$default_value]: " value || true
+    else
+      read -r -p "$prompt_text: " value || true
+    fi
+    value="${value:-$default_value}"
+    [[ -n "$value" ]] || { echo "Value is required."; continue; }
+    printf -v "$var_name" '%s' "$value"
+    return 0
+  done
+}
+
+prompt_project_id() {
+  local value=""
+  while true; do
+    read -r -p "Google Cloud project ID: " value || true
+    [[ -n "$value" ]] || { echo "Value is required."; continue; }
+    if gcloud projects describe "$value" >/dev/null 2>&1; then
+      PROJECT_ID="$value"
+      return 0
+    fi
+    echo "Project '$value' was not found or is not accessible with your current gcloud account."
+  done
+}
+
 resource_exists() {
   "$@" >/dev/null 2>&1
 }
 
 require_cmd gcloud
 
-PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null || true)}"
-REGION="${REGION:-us-central1}"
-APP_SERVICE="${APP_SERVICE:-cve-analyzer-app}"
-SYNC_FUNCTION="${SYNC_FUNCTION:-syncRecentCves}"
-ANALYTICS_FUNCTION="${ANALYTICS_FUNCTION:-refreshTrendAnalytics}"
-SQL_INSTANCE="${INSTANCE:-cve-analyzer-sql}"
-FIRESTORE_DB="${FIRESTORE_DB:-cve-analyzer}"
-APP_SA="${APP_SA:-cve-analyzer-sa}"
-
-[[ -n "$PROJECT_ID" ]] || fail "Set PROJECT_ID or configure gcloud first."
+prompt_project_id
+prompt_default REGION "Region" "us-central1"
+prompt_default APP_SERVICE "Cloud Run service name" "cve-analyzer-app"
+prompt_default SYNC_FUNCTION "Sync function name" "syncRecentCves"
+prompt_default ANALYTICS_FUNCTION "Analytics function name" "refreshTrendAnalytics"
+prompt_default SQL_INSTANCE "Cloud SQL instance name" "cve-analyzer-sql"
+prompt_default FIRESTORE_DB "Firestore database ID" "cve-analyzer"
+prompt_default APP_SA "Service account name" "cve-analyzer-sa"
 
 log "Active project: $PROJECT_ID"
 gcloud config set project "$PROJECT_ID" >/dev/null
