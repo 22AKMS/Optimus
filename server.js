@@ -83,6 +83,7 @@ app.get("/api/cves", async (req, res) => {
     const search = String(req.query.search || "").trim();
     const severity = String(req.query.severity || "").trim().toUpperCase();
     const product = String(req.query.product || "").trim();
+    const normalizedOnly = ["1", "true", "yes", "on"].includes(String(req.query.normalized_only || "").trim().toLowerCase());
     const yearRaw = String(req.query.year || "").trim();
     const sort = String(req.query.sort || "newest").trim();
     const sortDirection = String(req.query.direction || "desc").trim().toLowerCase() === "asc" ? "asc" : "desc";
@@ -138,6 +139,10 @@ app.get("/api/cves", async (req, res) => {
       )`);
       params.push(`%${product}%`);
       i += 1;
+    }
+
+    if (normalizedOnly) {
+      clauses.push(`c.product_count > 0`);
     }
 
     const orderByTemplates = {

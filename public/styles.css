@@ -133,7 +133,7 @@ code {
 }
 
 .controls-with-direction {
-  grid-template-columns: 1.5fr 1.15fr 0.9fr 0.8fr 1fr 0.8fr auto;
+  grid-template-columns: 1.45fr 1.1fr 0.9fr 0.8fr 1fr 0.8fr minmax(210px, 1.05fr) auto;
 }
 
 input, select, textarea, button {
@@ -402,6 +402,31 @@ button:disabled {
   background: white;
   color: var(--text);
   border: 1px solid var(--border);
+}
+
+.toggle-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-height: 52px;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: white;
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.toggle-control input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.toggle-control span {
+  line-height: 1.25;
 }
 
 .severity-unknown {

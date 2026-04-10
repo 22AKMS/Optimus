@@ -204,7 +204,8 @@ function currentQueryState() {
     severity: document.getElementById("severitySelect").value,
     year: document.getElementById("yearSelect").value,
     sort: document.getElementById("sortSelect").value,
-    direction: document.getElementById("directionSelect").value
+    direction: document.getElementById("directionSelect").value,
+    normalized_only: document.getElementById("normalizedOnlyToggle").checked ? "1" : ""
   };
 }
 
@@ -230,6 +231,7 @@ function readInitialFilters() {
   document.getElementById("productInput").value = get("product");
   document.getElementById("sortSelect").value = get("sort", "newest");
   document.getElementById("directionSelect").value = get("direction", "desc");
+  document.getElementById("normalizedOnlyToggle").checked = ["1", "true", "yes", "on"].includes(get("normalized_only").toLowerCase());
 
   return {
     severity: get("severity"),
@@ -290,6 +292,7 @@ async function loadCves(page = 1) {
   if (filters.year) params.set("year", filters.year);
   if (filters.sort) params.set("sort", filters.sort);
   if (filters.direction) params.set("direction", filters.direction);
+  if (filters.normalized_only) params.set("normalized_only", filters.normalized_only);
   params.set("page", String(page));
   params.set("limit", String(state.pagination.limit));
 
