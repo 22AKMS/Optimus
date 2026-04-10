@@ -242,6 +242,142 @@ async function fetchWindow({ startIso, endIso, windowType = "published", maxReco
   return allRecords;
 }
 
+async function upsertCveRecord(client, record) {
+  await client.query(`
+    INSERT INTO cves (
+      id, source_identifier, published_at, last_modified_at, vuln_status, description,
+      cvss_version, cvss_base_score, severity, attack_vector, attack_complexity,
+      privileges_required, user_interaction, scope, confidentiality_impact,
+      integrity_impact, availability_impact, exploitability_score, impact_score,
+      cwe_id, cwe_name, reference_count, product_count, has_kev, year, raw_json, updated_at
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6,
+      $7, $8, $9, $10, $11,
+      $12, $13, $14, $15,
+      $16, $17, $18, $19,
+      $20, $21, $22, $23, $24, $25, $26::jsonb, NOW()
+    )
+    ON CONFLICT (id) DO UPDATE SET
+      source_identifier = EXCLUDED.source_identifier,
+      published_at = EXCLUDED.published_at,
+      last_modified_at = EXCLUDED.last_modified_at,
+      vuln_status = EXCLUDED.vuln_status,
+      description = EXCLUDED.description,
+      cvss_version = EXCLUDED.cvss_version,
+      cvss_base_score = EXCLUDED.cvss_base_score,
+      severity = EXCLUDED.severity,
+      attack_vector = EXCLUDED.attack_vector,
+      attack_complexity = EXCLUDED.attack_complexity,
+      privileges_required = EXCLUDED.privileges_required,
+      user_interaction = EXCLUDED.user_interaction,
+      scope = EXCLUDED.scope,
+      confidentiality_impact = EXCLUDED.confidentiality_impact,
+      integrity_impact = EXCLUDED.integrity_impact,
+      availability_impact = EXCLUDED.availability_impact,
+      exploitability_score = EXCLUDED.exploitability_score,
+      impact_score = EXCLUDED.impact_score,
+      cwe_id = EXCLUDED.cwe_id,
+      cwe_name = EXCLUDED.cwe_name,
+      reference_count = EXCLUDED.reference_count,
+      product_count = EXCLUDED.product_count,
+      has_kev = EXCLUDED.has_kev,
+      year = EXCLUDED.year,
+      raw_json = EXCLUDED.raw_json,
+      updated_at = NOW()
+  `, [
+    record.id,
+    record.source_identifier,
+    record.published_at,
+    record.last_modified_at,
+    record.vuln_status,
+    record.description,
+    record.cvss_version,
+    record.cvss_base_score,
+    record.severity,
+    record.attack_vector,
+    record.attack_complexity,
+    record.privileges_required,
+    record.user_interaction,
+    record.scope,
+    record.confidentiality_impact,
+    record.integrity_impact,
+    record.availability_impact,
+    record.exploitability_score,
+    record.impact_score,
+    record.cwe_id,
+    record.cwe_name,
+    record.references.length,
+    record.products.length,
+    record.has_kev,
+    record.year,
+    JSON.stringify(record.raw_json)
+  ]);
+
+  await client.query("DELETE FROM cve_products WHERE cve_id = $1", [record.id]);
+  await client.query("DELETE FROM cve_references WHERE cve_id = $1", [record.id]);
+
+  for (const product of record.products) {
+    const vendorResult = await client.query(`
+      INSERT INTO vendors (name)
+      VALUES ($1)
+      ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+      RETURNING id
+    `, [product.vendor_name]);
+    const vendorId = vendorResult.rows[0].id;
+
+    const productResult = await client.query(`
+      INSERT INTO products (vendor_id, name, cpe_uri)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (vendor_id, name) DO UPDATE SET cpe_uri = EXCLUDED.cpe_uri
+      RETURNING id
+    `, [vendorId, product.product_name, product.cpe_uri]);
+    const productId = productResult.rows[0].id;
+
+    await client.query(`
+      INSERT INTO cve_products (
+        cve_id, product_id, match_criteria_id, cpe_uri,
+        version_start_including, version_start_excluding,
+        version_end_including, version_end_excluding, is_vulnerable
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (cve_id, product_id) DO UPDATE SET
+        match_criteria_id = EXCLUDED.match_criteria_id,
+        cpe_uri = EXCLUDED.cpe_uri,
+        version_start_including = EXCLUDED.version_start_including,
+        version_start_excluding = EXCLUDED.version_start_excluding,
+        version_end_including = EXCLUDED.version_end_including,
+        version_end_excluding = EXCLUDED.version_end_excluding,
+        is_vulnerable = EXCLUDED.is_vulnerable
+    `, [
+      record.id,
+      productId,
+      product.match_criteria_id,
+      product.cpe_uri,
+      product.version_start_including,
+      product.version_start_excluding,
+      product.version_end_including,
+      product.version_end_excluding,
+      product.is_vulnerable
+    ]);
+  }
+
+  for (const ref of record.references) {
+    await client.query(`
+      INSERT INTO cve_references (cve_id, url, source, tags)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (cve_id, url) DO UPDATE SET source = EXCLUDED.source, tags = EXCLUDED.tags
+    `, [record.id, ref.url, ref.source, ref.tags]);
+  }
+
+  await client.query(`
+    UPDATE cves
+    SET
+      reference_count = (SELECT COUNT(*) FROM cve_references WHERE cve_id = $1),
+      product_count = (SELECT COUNT(*) FROM cve_products WHERE cve_id = $1),
+      updated_at = NOW()
+    WHERE id = $1
+  `, [record.id]);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const now = new Date();
