@@ -139,3 +139,43 @@ FROM analytics_daily_severity;
 CREATE OR REPLACE VIEW looker_vendor_year AS
 SELECT year, vendor_name, severity, cve_count, critical_count, avg_cvss
 FROM analytics_vendor_year;
+
+
+CREATE OR REPLACE VIEW looker_summary_metrics AS
+SELECT
+  COUNT(*)::INTEGER AS total_cves,
+  SUM(CASE WHEN severity = 'CRITICAL' THEN 1 ELSE 0 END)::INTEGER AS critical_cves,
+  SUM(CASE WHEN product_count > 0 THEN 1 ELSE 0 END)::INTEGER AS normalized_software_cves,
+  ROUND(AVG(cvss_base_score)::numeric, 2) AS average_cvss,
+  MAX(published_at)::date AS latest_publish_date,
+  MAX(last_modified_at)::date AS latest_nvd_update
+FROM cves;
+
+CREATE OR REPLACE VIEW looker_cve_explorer AS
+SELECT
+  c.id AS cve_id,
+  c.published_at,
+  c.last_modified_at,
+  c.year,
+  c.severity,
+  c.cvss_base_score,
+  c.trending_score,
+  c.has_kev,
+  c.cwe_id,
+  c.cwe_name,
+  COALESCE(primary_match.vendor_name, 'Unknown') AS primary_vendor,
+  COALESCE(primary_match.product_name, 'Unknown') AS primary_product,
+  (c.product_count > 0) AS has_normalized_software,
+  c.product_count,
+  c.reference_count,
+  c.description
+FROM cves c
+LEFT JOIN LATERAL (
+  SELECT v.name AS vendor_name, p.name AS product_name
+  FROM cve_products cp
+  JOIN products p ON p.id = cp.product_id
+  JOIN vendors v ON v.id = p.vendor_id
+  WHERE cp.cve_id = c.id
+  ORDER BY v.name ASC, p.name ASC
+  LIMIT 1
+) primary_match ON TRUE;

@@ -59,6 +59,22 @@ prompt_password() {
   done
 }
 
+prompt_yes_no() {
+  local var_name="$1"
+  local prompt_text="$2"
+  local default_value="${3:-Y}"
+  local value=""
+  while true; do
+    read -r -p "$prompt_text [${default_value}/n]: " value || true
+    value="${value:-$default_value}"
+    case "$value" in
+      Y|y|yes|YES) printf -v "$var_name" '%s' "yes"; return 0 ;;
+      N|n|no|NO) printf -v "$var_name" '%s' "no"; return 0 ;;
+      *) echo "Enter Y or n." ;;
+    esac
+  done
+}
+
 prompt_project_id() {
   local value=""
   while true; do
@@ -250,6 +266,68 @@ wait_for_url() {
   return 1
 }
 
+get_sql_public_ip() {
+  gcloud sql instances describe "$INSTANCE" --project "$PROJECT_ID" --format=json | python3 -c '
+import json, sys
+obj = json.load(sys.stdin)
+ips = obj.get("ipAddresses") or []
+primary = ""
+for entry in ips:
+    if entry.get("type") == "PRIMARY":
+        primary = entry.get("ipAddress", "")
+        break
+if not primary and ips:
+    primary = ips[0].get("ipAddress", "")
+print(primary)
+'
+}
+
+ensure_looker_authorized_network() {
+  local cidr="$1"
+  local merged_networks
+  merged_networks="$(gcloud sql instances describe "$INSTANCE" --project "$PROJECT_ID" --format=json | python3 -c '
+import json, sys
+cidr = sys.argv[1]
+obj = json.load(sys.stdin)
+values = []
+for entry in ((obj.get("settings") or {}).get("ipConfiguration") or {}).get("authorizedNetworks") or []:
+    value = (entry or {}).get("value")
+    if value and value not in values:
+        values.append(value)
+if cidr not in values:
+    values.append(cidr)
+print(",".join(values))
+' "$cidr")"
+  [[ -n "$merged_networks" ]] || fail "Could not build authorized network list for Cloud SQL."
+  gcloud sql instances patch "$INSTANCE" --project "$PROJECT_ID" --authorized-networks="$merged_networks" --quiet >/dev/null
+}
+
+ensure_looker_reader_user() {
+  if gcloud sql users describe "$LOOKER_DB_USER" --project "$PROJECT_ID" --instance="$INSTANCE" >/dev/null 2>&1; then
+    gcloud sql users set-password "$LOOKER_DB_USER" \
+      --project "$PROJECT_ID" \
+      --instance="$INSTANCE" \
+      --password="$LOOKER_DB_PASSWORD" >/dev/null
+  else
+    gcloud sql users create "$LOOKER_DB_USER" \
+      --project "$PROJECT_ID" \
+      --instance="$INSTANCE" \
+      --password="$LOOKER_DB_PASSWORD" >/dev/null
+  fi
+}
+
+grant_looker_reader_access() {
+  export PGPASSWORD="$POSTGRES_PASSWORD"
+  psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PROXY_PORT" -U postgres -d "$DB_NAME" <<SQL >/dev/null
+GRANT CONNECT ON DATABASE $DB_NAME TO $LOOKER_DB_USER;
+GRANT USAGE ON SCHEMA public TO $LOOKER_DB_USER;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO $LOOKER_DB_USER;
+GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO $LOOKER_DB_USER;
+ALTER DEFAULT PRIVILEGES FOR ROLE $DB_USER IN SCHEMA public GRANT SELECT ON TABLES TO $LOOKER_DB_USER;
+ALTER DEFAULT PRIVILEGES FOR ROLE $DB_USER IN SCHEMA public GRANT SELECT ON SEQUENCES TO $LOOKER_DB_USER;
+SQL
+}
+
 cleanup() {
   if [[ -n "${PROXY_PID:-}" ]]; then
     kill "$PROXY_PID" >/dev/null 2>&1 || true
@@ -261,6 +339,7 @@ require_cmd gcloud
 require_cmd curl
 require_cmd psql
 require_cmd node
+require_cmd python3
 
 if [[ ! -f package.json || ! -d db || ! -d functions ]]; then
   fail "Run this from the project root that contains package.json, db/, and functions/."
@@ -283,6 +362,17 @@ prompt_default ANALYTICS_FUNCTION "Analytics function name" "refreshTrendAnalyti
 prompt_default APP_USER_ID "Demo app user ID" "demo-user"
 prompt_default INITIAL_SYNC_DAYS "Initial sync window in days" "30"
 prompt_optional NVD_API_KEY "Optional NVD API key" ""
+prompt_yes_no ENABLE_LOOKER_STUDIO "Configure Cloud SQL access for Looker Studio" "Y"
+if [[ "$ENABLE_LOOKER_STUDIO" == "yes" ]]; then
+  prompt_default LOOKER_DB_USER "Looker Studio read-only PostgreSQL user" "looker_reader"
+  prompt_password LOOKER_DB_PASSWORD "Looker Studio read-only PostgreSQL password"
+  prompt_yes_no ENABLE_LOOKER_AUTH_NETWORK "Authorize Looker Studio connector IP range (142.251.74.0/23)" "Y"
+else
+  LOOKER_DB_USER=""
+  LOOKER_DB_PASSWORD=""
+  ENABLE_LOOKER_AUTH_NETWORK="no"
+fi
+
 
 log "Using project $PROJECT_ID"
 gcloud config set project "$PROJECT_ID" >/dev/null
@@ -326,6 +416,12 @@ else
     --password="$DB_PASSWORD" >/dev/null
 fi
 
+
+if [[ "$ENABLE_LOOKER_STUDIO" == "yes" ]]; then
+  log "Ensuring Looker Studio read-only user exists"
+  ensure_looker_reader_user
+fi
+
 INSTANCE_CONNECTION_NAME="$(gcloud sql instances describe "$INSTANCE" --project "$PROJECT_ID" --format='value(connectionName)')"
 PROXY_PORT=9470
 
@@ -342,6 +438,21 @@ SQL
 export PGPASSWORD="$DB_PASSWORD"
 log "Applying schema"
 psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PROXY_PORT" -U "$DB_USER" -d "$DB_NAME" -f db/schema-postgres.sql >/dev/null
+
+if [[ "$ENABLE_LOOKER_STUDIO" == "yes" ]]; then
+  log "Granting Looker Studio read-only database access"
+  grant_looker_reader_access
+fi
+
+if [[ "$ENABLE_LOOKER_STUDIO" == "yes" && "$ENABLE_LOOKER_AUTH_NETWORK" == "yes" ]]; then
+  log "Authorizing Looker Studio connector network"
+  ensure_looker_authorized_network "142.251.74.0/23"
+fi
+
+LOOKER_SQL_HOST=""
+if [[ "$ENABLE_LOOKER_STUDIO" == "yes" ]]; then
+  LOOKER_SQL_HOST="$(get_sql_public_ip)"
+fi
 
 log "Performing initial NVD sync"
 DB_HOST=127.0.0.1 DB_PORT="$PROXY_PORT" DB_USER="$DB_USER" DB_NAME="$DB_NAME" DB_PASSWORD="$DB_PASSWORD" NVD_API_KEY="$NVD_API_KEY" DEFAULT_SYNC_WINDOW_TYPE=published node scripts/syncNvdToDb.js --days="$INITIAL_SYNC_DAYS" --window-type=published --max-records=300
@@ -397,5 +508,18 @@ Sync function: $SYNC_URL
 Analytics function: $ANALYTICS_URL
 Cloud SQL instance: $INSTANCE
 Firestore database: $FIRESTORE_DB
+OUT
+
+if [[ "$ENABLE_LOOKER_STUDIO" == "yes" ]]; then
+  cat <<OUT
+
+Looker Studio PostgreSQL connection
+Host/IP: ${LOOKER_SQL_HOST:-Unavailable}
+Port: 5432
+Database: $DB_NAME
+Username: $LOOKER_DB_USER
+Views: looker_summary_metrics, looker_daily_severity, looker_vendor_year, looker_cve_explorer
+Authorized connector network: $( [[ "$ENABLE_LOOKER_AUTH_NETWORK" == "yes" ]] && printf '142.251.74.0/23' || printf 'not added by installer' )
 
 OUT
+fi
