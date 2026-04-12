@@ -42,7 +42,7 @@ load_cloud_variables() {
     # shellcheck disable=SC1090
     source "$CLOUD_VARS_FILE"
   fi
-  PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null || true)}"
+  PROJECT_ID="${PROJECT_ID:-}"
   REGION="${REGION:-us-central1}"
   APP_SERVICE="${APP_SERVICE:-cve-analyzer-app}"
   SYNC_FUNCTION="${SYNC_FUNCTION:-syncRecentCves}"

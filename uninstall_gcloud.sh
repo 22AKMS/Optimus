@@ -106,7 +106,7 @@ resource_exists() {
 require_cmd gcloud
 load_cloud_variables
 
-prompt_project_id "${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null || true)}"
+prompt_project_id "${PROJECT_ID:-}"
 prompt_default REGION "Region" "${REGION:-us-central1}"
 prompt_default INSTANCE "Cloud SQL instance name" "${INSTANCE:-cve-analyzer-sql}"
 prompt_default DB_NAME "PostgreSQL database name" "${DB_NAME:-cve_analyzer}"
@@ -117,7 +117,6 @@ prompt_default APP_SA "Service account name" "${APP_SA:-cve-analyzer-sa}"
 prompt_default SYNC_FUNCTION "Sync function name" "${SYNC_FUNCTION:-syncRecentCves}"
 prompt_default ANALYTICS_FUNCTION "Analytics function name" "${ANALYTICS_FUNCTION:-refreshTrendAnalytics}"
 prompt_default APP_USER_ID "Demo app user ID" "${APP_USER_ID:-demo-user}"
-prompt_default INITIAL_SYNC_DAYS "Initial sync window in days" "${INITIAL_SYNC_DAYS:-30}"
 prompt_yes_no DELETE_LOCAL_CONFIG "Delete local cloud_variables.env and .cve_runtime files after uninstall" "Y"
 
 save_cloud_variables
