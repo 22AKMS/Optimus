@@ -321,10 +321,70 @@ grant_looker_reader_access() {
   psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PROXY_PORT" -U postgres -d "$DB_NAME" <<SQL >/dev/null
 GRANT CONNECT ON DATABASE $DB_NAME TO $LOOKER_DB_USER;
 GRANT USAGE ON SCHEMA public TO $LOOKER_DB_USER;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO $LOOKER_DB_USER;
-GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO $LOOKER_DB_USER;
-ALTER DEFAULT PRIVILEGES FOR ROLE $DB_USER IN SCHEMA public GRANT SELECT ON TABLES TO $LOOKER_DB_USER;
-ALTER DEFAULT PRIVILEGES FOR ROLE $DB_USER IN SCHEMA public GRANT SELECT ON SEQUENCES TO $LOOKER_DB_USER;
+DO $$
+DECLARE r record;
+BEGIN
+  FOR r IN
+    SELECT c.relname
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relkind IN ('r','v','m','f','p')
+      AND pg_get_userbyid(c.relowner) = current_user
+  LOOP
+    EXECUTE format('GRANT SELECT ON TABLE public.%I TO %I', r.relname, '$LOOKER_DB_USER');
+  END LOOP;
+END $$;
+DO $$
+DECLARE r record;
+BEGIN
+  FOR r IN
+    SELECT c.relname
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relkind = 'S'
+      AND pg_get_userbyid(c.relowner) = current_user
+  LOOP
+    EXECUTE format('GRANT SELECT ON SEQUENCE public.%I TO %I', r.relname, '$LOOKER_DB_USER');
+  END LOOP;
+END $$;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO $LOOKER_DB_USER;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO $LOOKER_DB_USER;
+SQL
+
+  export PGPASSWORD="$DB_PASSWORD"
+  psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PROXY_PORT" -U "$DB_USER" -d "$DB_NAME" <<SQL >/dev/null
+DO $$
+DECLARE r record;
+BEGIN
+  FOR r IN
+    SELECT c.relname
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relkind IN ('r','v','m','f','p')
+      AND pg_get_userbyid(c.relowner) = current_user
+  LOOP
+    EXECUTE format('GRANT SELECT ON TABLE public.%I TO %I', r.relname, '$LOOKER_DB_USER');
+  END LOOP;
+END $$;
+DO $$
+DECLARE r record;
+BEGIN
+  FOR r IN
+    SELECT c.relname
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relkind = 'S'
+      AND pg_get_userbyid(c.relowner) = current_user
+  LOOP
+    EXECUTE format('GRANT SELECT ON SEQUENCE public.%I TO %I', r.relname, '$LOOKER_DB_USER');
+  END LOOP;
+END $$;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO $LOOKER_DB_USER;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO $LOOKER_DB_USER;
 SQL
 }
 
@@ -340,9 +400,15 @@ require_cmd curl
 require_cmd psql
 require_cmd node
 require_cmd python3
+require_cmd npm
 
 if [[ ! -f package.json || ! -d db || ! -d functions ]]; then
   fail "Run this from the project root that contains package.json, db/, and functions/."
+fi
+
+if [[ ! -d node_modules ]]; then
+  log "Installing Node dependencies"
+  npm install
 fi
 
 CLOUD_SQL_PROXY_BIN="$(command -v cloud-sql-proxy || true)"
