@@ -66,6 +66,103 @@ exports.refreshTrendAnalytics = async (req, res) => {
       GROUP BY c.year, v.name, COALESCE(c.severity, 'UNKNOWN')
     `);
 
+    await client.query("TRUNCATE looker_daily_severity");
+    await client.query(`
+      INSERT INTO looker_daily_severity (published_date, severity, cve_count, max_cvss, avg_cvss)
+      SELECT published_date, severity, cve_count, max_cvss, avg_cvss
+      FROM analytics_daily_severity
+    `);
+
+    await client.query("TRUNCATE looker_vendor_year");
+    await client.query(`
+      INSERT INTO looker_vendor_year (year, vendor_name, severity, cve_count, critical_count, avg_cvss)
+      SELECT year, vendor_name, severity, cve_count, critical_count, avg_cvss
+      FROM analytics_vendor_year
+    `);
+
+    await client.query("TRUNCATE looker_summary_metrics");
+    await client.query(`
+      INSERT INTO looker_summary_metrics (singleton_key, total_cves, critical_cves, normalized_software_cves, average_cvss, latest_publish_date, latest_nvd_update)
+      SELECT
+        1,
+        COUNT(*)::INTEGER,
+        SUM(CASE WHEN severity = 'CRITICAL' THEN 1 ELSE 0 END)::INTEGER,
+        SUM(CASE WHEN product_count > 0 THEN 1 ELSE 0 END)::INTEGER,
+        ROUND(AVG(cvss_base_score)::numeric, 2),
+        MAX(published_at)::date,
+        MAX(last_modified_at)::date
+      FROM cves
+    `);
+
+    await client.query("TRUNCATE looker_cve_overview");
+    await client.query(`
+      INSERT INTO looker_cve_overview (
+        cve_id, published_date, last_modified_date, year, severity, cvss_base_score, trending_score, has_kev,
+        cwe_id, cwe_name, primary_vendor, primary_product, reference_count, product_count, description
+      )
+      SELECT
+        c.id AS cve_id,
+        c.published_at::date AS published_date,
+        c.last_modified_at::date AS last_modified_date,
+        c.year,
+        c.severity,
+        c.cvss_base_score,
+        c.trending_score,
+        c.has_kev,
+        c.cwe_id,
+        c.cwe_name,
+        COALESCE(primary_match.vendor_name, 'Unknown') AS primary_vendor,
+        COALESCE(primary_match.product_name, 'Unknown') AS primary_product,
+        c.reference_count,
+        c.product_count,
+        c.description
+      FROM cves c
+      LEFT JOIN LATERAL (
+        SELECT v.name AS vendor_name, p.name AS product_name
+        FROM cve_products cp
+        JOIN products p ON p.id = cp.product_id
+        JOIN vendors v ON v.id = p.vendor_id
+        WHERE cp.cve_id = c.id
+        ORDER BY v.name ASC, p.name ASC
+        LIMIT 1
+      ) primary_match ON TRUE
+    `);
+
+    await client.query("TRUNCATE looker_cve_explorer");
+    await client.query(`
+      INSERT INTO looker_cve_explorer (
+        cve_id, published_at, last_modified_at, year, severity, cvss_base_score, trending_score, has_kev,
+        cwe_id, cwe_name, primary_vendor, primary_product, has_normalized_software, product_count, reference_count, description
+      )
+      SELECT
+        c.id AS cve_id,
+        c.published_at,
+        c.last_modified_at,
+        c.year,
+        c.severity,
+        c.cvss_base_score,
+        c.trending_score,
+        c.has_kev,
+        c.cwe_id,
+        c.cwe_name,
+        COALESCE(primary_match.vendor_name, 'Unknown') AS primary_vendor,
+        COALESCE(primary_match.product_name, 'Unknown') AS primary_product,
+        (c.product_count > 0) AS has_normalized_software,
+        c.product_count,
+        c.reference_count,
+        c.description
+      FROM cves c
+      LEFT JOIN LATERAL (
+        SELECT v.name AS vendor_name, p.name AS product_name
+        FROM cve_products cp
+        JOIN products p ON p.id = cp.product_id
+        JOIN vendors v ON v.id = p.vendor_id
+        WHERE cp.cve_id = c.id
+        ORDER BY v.name ASC, p.name ASC
+        LIMIT 1
+      ) primary_match ON TRUE
+    `);
+
     await client.query("COMMIT");
     res.json({ ok: true });
   } catch (error) {

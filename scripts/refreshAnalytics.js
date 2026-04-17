@@ -1,7 +1,10 @@
 const path = require("path");
-const dotenv = require("dotenv");
-
-dotenv.config({ path: path.join(__dirname, "..", ".env") });
+try {
+  const dotenv = require("dotenv");
+  dotenv.config({ path: path.join(__dirname, "..", ".env") });
+} catch (error) {
+  // dotenv is optional when env vars are already provided
+}
 
 const { refreshAnalyticsTables } = require("../lib/analytics");
 

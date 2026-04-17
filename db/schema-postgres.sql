@@ -104,78 +104,93 @@ CREATE INDEX IF NOT EXISTS idx_vendors_name ON vendors(name);
 CREATE INDEX IF NOT EXISTS idx_cve_products_product_id ON cve_products(product_id);
 CREATE INDEX IF NOT EXISTS idx_cve_references_cve_id ON cve_references(cve_id);
 
-CREATE OR REPLACE VIEW looker_cve_overview AS
-SELECT
-  c.id AS cve_id,
-  c.published_at::date AS published_date,
-  c.last_modified_at::date AS last_modified_date,
-  c.year,
-  c.severity,
-  c.cvss_base_score,
-  c.trending_score,
-  c.has_kev,
-  c.cwe_id,
-  c.cwe_name,
-  COALESCE(primary_match.vendor_name, 'Unknown') AS primary_vendor,
-  COALESCE(primary_match.product_name, 'Unknown') AS primary_product,
-  c.reference_count,
-  c.product_count,
-  c.description
-FROM cves c
-LEFT JOIN LATERAL (
-  SELECT v.name AS vendor_name, p.name AS product_name
-  FROM cve_products cp
-  JOIN products p ON p.id = cp.product_id
-  JOIN vendors v ON v.id = p.vendor_id
-  WHERE cp.cve_id = c.id
-  ORDER BY v.name ASC, p.name ASC
-  LIMIT 1
-) primary_match ON TRUE;
+DO $$
+DECLARE rec record;
+BEGIN
+  FOR rec IN
+    SELECT c.relname, c.relkind
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname IN (
+        'looker_cve_overview',
+        'looker_daily_severity',
+        'looker_vendor_year',
+        'looker_summary_metrics',
+        'looker_cve_explorer'
+      )
+      AND c.relkind IN ('v', 'm')
+  LOOP
+    EXECUTE format(
+      'DROP %s IF EXISTS public.%I CASCADE',
+      CASE WHEN rec.relkind = 'm' THEN 'MATERIALIZED VIEW' ELSE 'VIEW' END,
+      rec.relname
+    );
+  END LOOP;
+END $$;
 
-CREATE OR REPLACE VIEW looker_daily_severity AS
-SELECT published_date, severity, cve_count, max_cvss, avg_cvss
-FROM analytics_daily_severity;
+CREATE TABLE IF NOT EXISTS looker_cve_overview (
+  cve_id TEXT PRIMARY KEY,
+  published_date DATE,
+  last_modified_date DATE,
+  year INTEGER,
+  severity TEXT,
+  cvss_base_score NUMERIC(4,1),
+  trending_score NUMERIC(8,2),
+  has_kev BOOLEAN,
+  cwe_id TEXT,
+  cwe_name TEXT,
+  primary_vendor TEXT,
+  primary_product TEXT,
+  reference_count INTEGER,
+  product_count INTEGER,
+  description TEXT
+);
 
-CREATE OR REPLACE VIEW looker_vendor_year AS
-SELECT year, vendor_name, severity, cve_count, critical_count, avg_cvss
-FROM analytics_vendor_year;
+CREATE TABLE IF NOT EXISTS looker_daily_severity (
+  published_date DATE NOT NULL,
+  severity TEXT NOT NULL,
+  cve_count INTEGER NOT NULL,
+  max_cvss NUMERIC(4,1),
+  avg_cvss NUMERIC(4,2),
+  PRIMARY KEY (published_date, severity)
+);
 
+CREATE TABLE IF NOT EXISTS looker_vendor_year (
+  year INTEGER NOT NULL,
+  vendor_name TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  cve_count INTEGER NOT NULL,
+  critical_count INTEGER NOT NULL,
+  avg_cvss NUMERIC(4,2),
+  PRIMARY KEY (year, vendor_name, severity)
+);
 
-CREATE OR REPLACE VIEW looker_summary_metrics AS
-SELECT
-  COUNT(*)::INTEGER AS total_cves,
-  SUM(CASE WHEN severity = 'CRITICAL' THEN 1 ELSE 0 END)::INTEGER AS critical_cves,
-  SUM(CASE WHEN product_count > 0 THEN 1 ELSE 0 END)::INTEGER AS normalized_software_cves,
-  ROUND(AVG(cvss_base_score)::numeric, 2) AS average_cvss,
-  MAX(published_at)::date AS latest_publish_date,
-  MAX(last_modified_at)::date AS latest_nvd_update
-FROM cves;
+CREATE TABLE IF NOT EXISTS looker_summary_metrics (
+  singleton_key SMALLINT PRIMARY KEY DEFAULT 1,
+  total_cves INTEGER,
+  critical_cves INTEGER,
+  normalized_software_cves INTEGER,
+  average_cvss NUMERIC(4,2),
+  latest_publish_date DATE,
+  latest_nvd_update DATE
+);
 
-CREATE OR REPLACE VIEW looker_cve_explorer AS
-SELECT
-  c.id AS cve_id,
-  c.published_at,
-  c.last_modified_at,
-  c.year,
-  c.severity,
-  c.cvss_base_score,
-  c.trending_score,
-  c.has_kev,
-  c.cwe_id,
-  c.cwe_name,
-  COALESCE(primary_match.vendor_name, 'Unknown') AS primary_vendor,
-  COALESCE(primary_match.product_name, 'Unknown') AS primary_product,
-  (c.product_count > 0) AS has_normalized_software,
-  c.product_count,
-  c.reference_count,
-  c.description
-FROM cves c
-LEFT JOIN LATERAL (
-  SELECT v.name AS vendor_name, p.name AS product_name
-  FROM cve_products cp
-  JOIN products p ON p.id = cp.product_id
-  JOIN vendors v ON v.id = p.vendor_id
-  WHERE cp.cve_id = c.id
-  ORDER BY v.name ASC, p.name ASC
-  LIMIT 1
-) primary_match ON TRUE;
+CREATE TABLE IF NOT EXISTS looker_cve_explorer (
+  cve_id TEXT PRIMARY KEY,
+  published_at TIMESTAMPTZ,
+  last_modified_at TIMESTAMPTZ,
+  year INTEGER,
+  severity TEXT,
+  cvss_base_score NUMERIC(4,1),
+  trending_score NUMERIC(8,2),
+  has_kev BOOLEAN,
+  cwe_id TEXT,
+  cwe_name TEXT,
+  primary_vendor TEXT,
+  primary_product TEXT,
+  has_normalized_software BOOLEAN,
+  product_count INTEGER,
+  reference_count INTEGER,
+  description TEXT
+);

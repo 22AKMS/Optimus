@@ -2,8 +2,8 @@ const path = require("path");
 try {
   const dotenv = require("dotenv");
   dotenv.config({ path: path.join(__dirname, "..", ".env") });
-} catch (_err) {
-  // dotenv is optional here; install_gcloud.sh passes env vars directly.
+} catch (error) {
+  // dotenv is optional when env vars are already provided
 }
 
 const { pool } = require("../lib/db");
