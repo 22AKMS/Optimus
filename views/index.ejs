@@ -18,7 +18,12 @@
           <p class="header-copy"><%= sourceNotice %></p>
         </div>
       </div>
-      <a class="nav-button" href="/watchlist">Watchlist</a>
+      <div class="header-actions">
+        <% if (sharedLookerStudioUrl) { %>
+          <a class="nav-button secondary" href="<%= sharedLookerStudioUrl %>" target="_blank" rel="noopener noreferrer">Dashboard</a>
+        <% } %>
+        <a class="nav-button" href="/watchlist">Watchlist</a>
+      </div>
     </div>
   </header>
 
@@ -68,6 +73,17 @@
           </div>
           <div id="highSeverityList" class="stack"></div>
         </div>
+
+        <% if (sharedLookerStudioUrl) { %>
+        <div class="panel">
+          <h2>Shared Dashboard</h2>
+          <p class="muted compact">Open the shared Looker Studio dashboard for this deployment.</p>
+          <div class="stack tight">
+            <a class="nav-button" href="<%= sharedLookerStudioUrl %>" target="_blank" rel="noopener noreferrer">Open shared dashboard</a>
+            <code><%= sharedLookerStudioUrl %></code>
+          </div>
+        </div>
+        <% } %>
 
         <div class="panel">
           <h2>Looker Studio Views</h2>

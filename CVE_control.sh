@@ -3,8 +3,6 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_DIR="$ROOT_DIR/.cve_runtime"
-PID_FILE="$RUNTIME_DIR/local.pid"
-LOG_FILE="$RUNTIME_DIR/local.log"
 CONFIG_FILE="$RUNTIME_DIR/control.env"
 mkdir -p "$RUNTIME_DIR"
 
@@ -13,7 +11,6 @@ REGION="${REGION:-us-central1}"
 APP_SERVICE="${APP_SERVICE:-cve-analyzer-app}"
 SYNC_FUNCTION="${SYNC_FUNCTION:-syncRecentCves}"
 ANALYTICS_FUNCTION="${ANALYTICS_FUNCTION:-refreshTrendAnalytics}"
-LOCAL_PORT="${PORT:-8080}"
 DEFAULT_SYNC_DAYS="${DEFAULT_SYNC_DAYS:-7}"
 DEFAULT_MAX_RECORDS="${DEFAULT_MAX_RECORDS:-250}"
 MAX_SYNC_DAYS="${MAX_SYNC_DAYS:-30}"
@@ -93,53 +90,6 @@ require_cloud_project() {
   [[ -n "$PROJECT_ID" ]] || { say "No gcloud project is configured."; return 1; }
 }
 
-local_running() {
-  [[ -f "$PID_FILE" ]] || return 1
-  local pid
-  pid="$(cat "$PID_FILE")"
-  kill -0 "$pid" >/dev/null 2>&1
-}
-
-start_local() {
-  if local_running; then
-    say "Local Optimus is already running on PID $(cat "$PID_FILE")."
-    return
-  fi
-  say "Starting local CVE Analyzer on port $LOCAL_PORT..."
-  cd "$ROOT_DIR"
-  nohup npm start >"$LOG_FILE" 2>&1 &
-  echo $! >"$PID_FILE"
-  sleep 2
-  if local_running; then
-    say "Started. URL: http://localhost:$LOCAL_PORT"
-    say "Log file: $LOG_FILE"
-  else
-    say "Start failed. Check $LOG_FILE"
-  fi
-}
-
-stop_local() {
-  if ! local_running; then
-    say "Local Optimus is not running."
-    rm -f "$PID_FILE"
-    return
-  fi
-  local pid
-  pid="$(cat "$PID_FILE")"
-  kill "$pid" >/dev/null 2>&1 || true
-  rm -f "$PID_FILE"
-  say "Stopped local CVE Analyzer."
-}
-
-local_status() {
-  if local_running; then
-    say "Local Optimus is running on PID $(cat "$PID_FILE")."
-    say "URL: http://localhost:$LOCAL_PORT"
-  else
-    say "Local Optimus is not running."
-  fi
-}
-
 show_cloud_status() {
   require_cloud_project || return
   gcloud run services describe "$APP_SERVICE" --region "$REGION" --format='table(metadata.name,status.url,status.latestReadyRevisionName,status.conditions[0].status)' || true
@@ -178,6 +128,61 @@ cloud_app_status() {
 tail_cloud_logs() {
   require_cloud_project || return
   gcloud run services logs read "$APP_SERVICE" --region "$REGION" --limit=50
+}
+
+
+run_service_json() {
+  gcloud run services describe "$APP_SERVICE" --region "$REGION" --format=json 2>/dev/null || true
+}
+
+current_dashboard_url() {
+  local service_json
+  service_json="$(run_service_json)"
+  [[ -n "$service_json" ]] || return 0
+  python3 -c 'import json,sys
+try:
+    data=json.load(sys.stdin)
+    envs=((data.get("spec") or {}).get("template") or {}).get("spec", {}).get("containers", [{}])[0].get("env", [])
+    for item in envs:
+        if item.get("name") == "SHARED_LOOKER_STUDIO_URL":
+            print(item.get("value", ""))
+            break
+except Exception:
+    pass
+' <<<"$service_json"
+}
+
+validate_http_url() {
+  local value="$1"
+  [[ "$value" =~ ^https?://.+$ ]] || { say "Enter a valid http(s) URL."; return 1; }
+}
+
+show_dashboard_url() {
+  require_cloud_project || return
+  local current
+  current="$(current_dashboard_url)"
+  if [[ -n "$current" ]]; then
+    say "Shared dashboard URL: $current"
+  else
+    say "No shared dashboard URL is configured on $APP_SERVICE."
+  fi
+}
+
+set_dashboard_url() {
+  require_cloud_project || return
+  local url="$1"
+  validate_http_url "$url" || return 1
+  say "Updating shared Looker Studio URL on $APP_SERVICE..."
+  gcloud run services update "$APP_SERVICE" --region "$REGION" --update-env-vars "^~^SHARED_LOOKER_STUDIO_URL=$url" >/dev/null
+  say "Shared dashboard URL updated. It will appear in the app after the new revision becomes ready."
+  show_dashboard_url
+}
+
+clear_dashboard_url() {
+  require_cloud_project || return
+  say "Removing shared Looker Studio URL from $APP_SERVICE..."
+  gcloud run services update "$APP_SERVICE" --region "$REGION" --remove-env-vars SHARED_LOOKER_STUDIO_URL >/dev/null
+  say "Shared dashboard URL removed from the app."
 }
 
 function_url() {
@@ -222,17 +227,17 @@ show_menu() {
   cat <<'MENU'
 
 Optimus control panel
-1) Start local app
-2) Stop local app
-3) Local status
-4) Show cloud status
-5) Show cloud URL
-6) Tail cloud logs
-7) Trigger syncRecentCves with saved days/max CVE settings
-8) Set sync window days
-9) Set max CVEs per sync
-10) Show sync settings
-11) Trigger refreshTrendAnalytics
+1) Show cloud status
+2) Show cloud URL
+3) Tail cloud logs
+4) Trigger syncRecentCves with saved days/max CVE settings
+5) Set sync window days
+6) Set max CVEs per sync
+7) Show sync settings
+8) Trigger refreshTrendAnalytics
+9) Show shared dashboard URL
+10) Set or change shared dashboard URL
+11) Remove shared dashboard URL
 12) Start Cloud Run web app
 13) Stop Cloud Run web app
 14) Cloud web app status
@@ -243,14 +248,14 @@ MENU
 load_config
 
 case "${1:-}" in
-  start) start_local; exit 0 ;;
-  stop) stop_local; exit 0 ;;
-  status) local_status; exit 0 ;;
   cloud-start) start_cloud_app; exit 0 ;;
   cloud-stop) stop_cloud_app; exit 0 ;;
   cloud-status) cloud_app_status; exit 0 ;;
   sync) trigger_sync "${2:-}" "${3:-}"; exit 0 ;;
   analytics) trigger_analytics; exit 0 ;;
+  dashboard-show) show_dashboard_url; exit 0 ;;
+  dashboard-set) [[ -n "${2:-}" ]] || { say "Usage: ./CVE_control.sh dashboard-set <https://...>"; exit 1; }; set_dashboard_url "$2"; exit 0 ;;
+  dashboard-clear) clear_dashboard_url; exit 0 ;;
   set-days) [[ -n "${2:-}" ]] || { say "Usage: ./CVE_control.sh set-days <days>"; exit 1; }; set_sync_days "$2"; exit 0 ;;
   set-max-records) [[ -n "${2:-}" ]] || { say "Usage: ./CVE_control.sh set-max-records <count|0>"; exit 1; }; set_sync_max_records "$2"; exit 0 ;;
   config) show_sync_config; exit 0 ;;
@@ -260,23 +265,26 @@ while true; do
   show_menu
   read -r -p 'Choose an option: ' choice
   case "$choice" in
-    1) start_local ;;
-    2) stop_local ;;
-    3) local_status ;;
-    4) show_cloud_status ;;
-    5) show_cloud_url ;;
-    6) tail_cloud_logs ;;
-    7) trigger_sync ;;
-    8)
+    1) show_cloud_status ;;
+    2) show_cloud_url ;;
+    3) tail_cloud_logs ;;
+    4) trigger_sync ;;
+    5)
       read -r -p 'Enter sync window days (1-30): ' value
       set_sync_days "$value"
       ;;
-    9)
+    6)
       read -r -p 'Enter max CVEs per sync (0 = full day window): ' value
       set_sync_max_records "$value"
       ;;
-    10) show_sync_config ;;
-    11) trigger_analytics ;;
+    7) show_sync_config ;;
+    8) trigger_analytics ;;
+    9) show_dashboard_url ;;
+    10)
+      read -r -p 'Enter the shared Looker Studio URL: ' value
+      set_dashboard_url "$value"
+      ;;
+    11) clear_dashboard_url ;;
     12) start_cloud_app ;;
     13) stop_cloud_app ;;
     14) cloud_app_status ;;

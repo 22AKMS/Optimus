@@ -12,7 +12,18 @@ const port = Number(process.env.PORT || 8080);
 const defaultUserId = process.env.APP_USER_ID || "demo-user";
 const appName = process.env.APP_NAME || "Optimus - A CVE Analysis Optimizer";
 const sourceNotice = process.env.SOURCE_NOTICE || "This product uses data from the NVD API but is not endorsed or certified by the NVD.";
+const sharedLookerStudioUrl = String(process.env.SHARED_LOOKER_STUDIO_URL || "").trim();
 const store = new UserStateStore();
+
+function viewContext(extra = {}) {
+  return {
+    appUserId: defaultUserId,
+    appName,
+    sourceNotice,
+    sharedLookerStudioUrl,
+    ...extra
+  };
+}
 
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
@@ -29,20 +40,17 @@ app.get("/healthz", async (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.render("index", { appUserId: defaultUserId, appName, sourceNotice });
+  res.render("index", viewContext());
 });
 
 app.get("/watchlist", (req, res) => {
-  res.render("watchlist", { appUserId: defaultUserId, appName, sourceNotice });
+  res.render("watchlist", viewContext());
 });
 
 app.get("/cves/:cveId", (req, res) => {
-  res.render("cve", {
-    appUserId: defaultUserId,
-    appName,
-    sourceNotice,
+  res.render("cve", viewContext({
     cveId: String(req.params.cveId || "").trim().toUpperCase()
-  });
+  }));
 });
 
 app.get("/api/analytics/overview", async (req, res) => {
