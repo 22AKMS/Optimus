@@ -185,6 +185,84 @@ clear_dashboard_url() {
   say "Shared dashboard URL removed from the app."
 }
 
+
+
+function_json() {
+  gcloud functions describe "$SYNC_FUNCTION" --gen2 --region "$REGION" --format=json 2>/dev/null || true
+}
+
+current_nvd_api_key() {
+  local fn_json
+  fn_json="$(function_json)"
+  [[ -n "$fn_json" ]] || return 0
+  python3 -c 'import json,sys
+try:
+    data=json.load(sys.stdin)
+    envs=((data.get("serviceConfig") or {}).get("environmentVariables") or {})
+    print(envs.get("NVD_API_KEY", ""))
+except Exception:
+    pass
+' <<<"$fn_json"
+}
+
+mask_secret() {
+  local value="$1"
+  local length=${#value}
+  if (( length <= 4 )); then
+    printf '****'
+  else
+    printf '****%s' "${value: -4}"
+  fi
+}
+
+sync_run_service_name() {
+  local fn_json
+  fn_json="$(function_json)"
+  [[ -n "$fn_json" ]] || return 0
+  python3 -c 'import json,sys
+try:
+    data=json.load(sys.stdin)
+    service=(data.get("serviceConfig") or {}).get("service", "")
+    print(service.rsplit("/", 1)[-1] if service else "")
+except Exception:
+    pass
+' <<<"$fn_json"
+}
+
+show_nvd_api_key() {
+  require_cloud_project || return
+  local current
+  current="$(current_nvd_api_key)"
+  if [[ -n "$current" ]]; then
+    say "NVD API key is configured on $SYNC_FUNCTION: $(mask_secret "$current")"
+  else
+    say "No NVD API key is configured on $SYNC_FUNCTION."
+  fi
+}
+
+set_nvd_api_key() {
+  require_cloud_project || return
+  local key="$1"
+  [[ -n "$key" ]] || { say "Enter a non-empty NVD API key."; return 1; }
+  local service_name
+  service_name="$(sync_run_service_name)"
+  [[ -n "$service_name" ]] || { say "Could not determine the underlying Cloud Run service for $SYNC_FUNCTION."; return 1; }
+  say "Updating NVD API key on $SYNC_FUNCTION..."
+  gcloud run services update "$service_name" --region "$REGION" --update-env-vars "^~^NVD_API_KEY=$key" >/dev/null
+  say "NVD API key updated on $SYNC_FUNCTION."
+  show_nvd_api_key
+}
+
+clear_nvd_api_key() {
+  require_cloud_project || return
+  local service_name
+  service_name="$(sync_run_service_name)"
+  [[ -n "$service_name" ]] || { say "Could not determine the underlying Cloud Run service for $SYNC_FUNCTION."; return 1; }
+  say "Removing NVD API key from $SYNC_FUNCTION..."
+  gcloud run services update "$service_name" --region "$REGION" --remove-env-vars NVD_API_KEY >/dev/null
+  say "NVD API key removed from $SYNC_FUNCTION."
+}
+
 function_url() {
   local function_name="$1"
   gcloud functions describe "$function_name" --gen2 --region "$REGION" --format='value(serviceConfig.uri)' 2>/dev/null || true
@@ -238,10 +316,13 @@ Optimus control panel
 9) Show shared dashboard URL
 10) Set or change shared dashboard URL
 11) Remove shared dashboard URL
-12) Start Cloud Run web app
-13) Stop Cloud Run web app
-14) Cloud web app status
-15) Exit
+12) Show NVD API key status
+13) Set or change NVD API key
+14) Remove NVD API key
+15) Start Cloud Run web app
+16) Stop Cloud Run web app
+17) Cloud web app status
+18) Exit
 MENU
 }
 
@@ -256,6 +337,9 @@ case "${1:-}" in
   dashboard-show) show_dashboard_url; exit 0 ;;
   dashboard-set) [[ -n "${2:-}" ]] || { say "Usage: ./CVE_control.sh dashboard-set <https://...>"; exit 1; }; set_dashboard_url "$2"; exit 0 ;;
   dashboard-clear) clear_dashboard_url; exit 0 ;;
+  nvd-key-show) show_nvd_api_key; exit 0 ;;
+  nvd-key-set) [[ -n "${2:-}" ]] || { say "Usage: ./CVE_control.sh nvd-key-set <api-key>"; exit 1; }; set_nvd_api_key "$2"; exit 0 ;;
+  nvd-key-clear) clear_nvd_api_key; exit 0 ;;
   set-days) [[ -n "${2:-}" ]] || { say "Usage: ./CVE_control.sh set-days <days>"; exit 1; }; set_sync_days "$2"; exit 0 ;;
   set-max-records) [[ -n "${2:-}" ]] || { say "Usage: ./CVE_control.sh set-max-records <count|0>"; exit 1; }; set_sync_max_records "$2"; exit 0 ;;
   config) show_sync_config; exit 0 ;;
@@ -285,10 +369,16 @@ while true; do
       set_dashboard_url "$value"
       ;;
     11) clear_dashboard_url ;;
-    12) start_cloud_app ;;
-    13) stop_cloud_app ;;
-    14) cloud_app_status ;;
-    15) exit 0 ;;
+    12) show_nvd_api_key ;;
+    13)
+      read -r -p 'Enter the NVD API key: ' value
+      set_nvd_api_key "$value"
+      ;;
+    14) clear_nvd_api_key ;;
+    15) start_cloud_app ;;
+    16) stop_cloud_app ;;
+    17) cloud_app_status ;;
+    18) exit 0 ;;
     *) say "Invalid choice." ;;
   esac
 done
