@@ -14,22 +14,18 @@ const appName = process.env.APP_NAME || "Optimus - A CVE Analysis Optimizer";
 const sourceNotice = process.env.SOURCE_NOTICE || "This product uses data from the NVD API but is not endorsed or certified by the NVD.";
 const sharedLookerStudioUrl = String(process.env.SHARED_LOOKER_STUDIO_URL || "").trim();
 const store = new UserStateStore();
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
-function parseSyncWindowDays(run) {
-  const note = String(run?.note || "").trim();
-  if (!note) return null;
+function parseRecentWindowDays(value, fallback = 30) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(Math.max(Math.floor(numeric), 1), 3650);
+}
 
-  const match = note.match(/from\s+(\S+)\s+to\s+(\S+)/i);
-  if (!match) return null;
-
-  const start = Date.parse(match[1]);
-  const end = Date.parse(match[2]);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-    return null;
-  }
-
-  return Math.max(1, Math.round((end - start) / MS_PER_DAY));
+function recentWindowPredicate(columnSql, placeholderIndex) {
+  return `
+    ${columnSql} >= CURRENT_DATE - (($${placeholderIndex}::int - 1) * INTERVAL '1 day')
+    AND ${columnSql} < CURRENT_DATE + INTERVAL '1 day'
+  `;
 }
 
 function viewContext(extra = {}) {
@@ -72,29 +68,17 @@ app.get("/cves/:cveId", (req, res) => {
 
 app.get("/api/analytics/overview", async (req, res) => {
   try {
-    const [latestRunResult, latestSuccessfulRunResult] = await Promise.all([
+    const [latestRunResult] = await Promise.all([
       query(`
         SELECT started_at, finished_at, status, cve_count, note
         FROM ingest_runs
-        ORDER BY started_at DESC
-        LIMIT 1
-      `),
-      query(`
-        SELECT started_at, finished_at, status, cve_count, note
-        FROM ingest_runs
-        WHERE status = 'success'
         ORDER BY started_at DESC
         LIMIT 1
       `)
     ]);
 
     const latestRun = latestRunResult.rows[0] || null;
-    const latestSuccessfulRun = latestSuccessfulRunResult.rows[0] || null;
-    const fallbackWindowDays = Number(process.env.DEFAULT_SYNC_WINDOW_DAYS || 30);
-    const syncWindowDays = Math.min(
-      Math.max(parseSyncWindowDays(latestSuccessfulRun || latestRun) || fallbackWindowDays, 1),
-      3650
-    );
+    const windowDays = parseRecentWindowDays(req.query.days || process.env.DEFAULT_SYNC_WINDOW_DAYS || 30, 30);
     const severityExpr = normalizedSeveritySql("severity", "cvss_base_score");
 
     const overviewResult = await query(`
@@ -102,18 +86,18 @@ app.get("/api/analytics/overview", async (req, res) => {
         COUNT(*)::int AS total_cves,
         COUNT(*) FILTER (WHERE ${severityExpr} = 'CRITICAL')::int AS critical_cves,
         COUNT(*) FILTER (WHERE ${severityExpr} = 'HIGH')::int AS high_cves,
-        COUNT(*) FILTER (WHERE published_at >= NOW() - ($1::int * INTERVAL '1 day'))::int AS recent_cves,
         COUNT(*) FILTER (WHERE has_kev)::int AS kev_cves,
         COUNT(*) FILTER (WHERE product_count > 0)::int AS normalized_cves,
         MIN(published_at) AS oldest_published_at,
         MAX(last_modified_at) AS latest_modified_at
       FROM cves
-    `, [syncWindowDays]);
+      WHERE ${recentWindowPredicate("published_at", 1)}
+    `, [windowDays]);
 
     res.json({
       overview: overviewResult.rows[0],
       latest_run: latestRun,
-      sync_window_days: syncWindowDays
+      window_days: windowDays
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -125,6 +109,7 @@ app.get("/api/cves", async (req, res) => {
     const search = String(req.query.search || "").trim();
     const severity = String(req.query.severity || "").trim().toUpperCase();
     const product = String(req.query.product || "").trim();
+    const windowDays = parseRecentWindowDays(req.query.days || process.env.DEFAULT_SYNC_WINDOW_DAYS || 30, 30);
     const normalizedOnly = ["1", "true", "yes", "on"].includes(String(req.query.normalized_only || "").trim().toLowerCase());
     const yearRaw = String(req.query.year || "").trim();
     const sort = String(req.query.sort || "newest").trim();
@@ -137,6 +122,10 @@ app.get("/api/cves", async (req, res) => {
     const params = [];
     let i = 1;
     const severityExpr = normalizedSeveritySql("c.severity", "c.cvss_base_score");
+
+    clauses.push(`(${recentWindowPredicate("c.published_at", i)})`);
+    params.push(windowDays);
+    i += 1;
 
     if (search) {
       clauses.push(`(
@@ -250,9 +239,10 @@ app.get("/api/cves", async (req, res) => {
     const yearsResult = await query(`
       SELECT DISTINCT year
       FROM cves
+      WHERE ${recentWindowPredicate("published_at", 1)}
       ORDER BY year DESC
       LIMIT 20
-    `);
+    `, [windowDays]);
 
     const severities = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE", "UNKNOWN"];
 
@@ -268,6 +258,7 @@ app.get("/api/cves", async (req, res) => {
         has_prev: safePage > 1,
         has_next: safePage < pageCount
       },
+      window_days: windowDays,
       sort,
       direction: sortDirection
     });
@@ -278,6 +269,7 @@ app.get("/api/cves", async (req, res) => {
 
 app.get("/api/high-severity", async (req, res) => {
   try {
+    const windowDays = parseRecentWindowDays(req.query.days || process.env.DEFAULT_SYNC_WINDOW_DAYS || 30, 30);
     const result = await query(`
       SELECT
         c.*,
@@ -298,11 +290,12 @@ app.get("/api/high-severity", async (req, res) => {
         ORDER BY v.name ASC, p.name ASC
         LIMIT 1
       ) primary_match ON TRUE
+      WHERE ${recentWindowPredicate("c.published_at", 1)}
       ORDER BY ${severityOrderSql("c.severity", "c.cvss_base_score")} DESC, c.cvss_base_score DESC NULLS LAST, c.published_at DESC
       LIMIT 8
-    `);
+    `, [windowDays]);
 
-    res.json({ items: result.rows.map(serializeCve) });
+    res.json({ items: result.rows.map(serializeCve), window_days: windowDays });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
