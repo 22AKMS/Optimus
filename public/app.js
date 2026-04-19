@@ -105,10 +105,6 @@ function pluralizeDayLabel(days) {
   return `${days} day${days === 1 ? "" : "s"}`;
 }
 
-function recentWindowDetail(days) {
-  return `Window: last ${pluralizeDayLabel(days)} (rolling)`;
-}
-
 function lastSyncDetail(latestRun) {
   if (!latestRun) {
     return "Run syncRecentCves after deploy";
@@ -182,7 +178,7 @@ function renderOverview(payload) {
   state.windowDays = windowDays;
 
   const cards = [
-    statCard("Total CVEs", formatCount(totalCves), recentWindowDetail(windowDays)),
+    statCard("Total CVEs", formatCount(totalCves)),
     statCard("Critical CVEs", formatCount(overview.critical_cves || 0), `${formatCount(overview.high_cves || 0)} high severity CVEs`),
     statCard("Known Exploited", formatCount(overview.kev_cves || 0), "CISA KEV-matched items"),
     statCard("Oldest Publish Date", overview.oldest_published_at ? formatDate(overview.oldest_published_at) : "No data", lastSyncDetail(latestRun)),
