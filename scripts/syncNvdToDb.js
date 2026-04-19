@@ -17,6 +17,7 @@ const NVD_MAX_FETCH_RETRIES = Math.max(Number(process.env.NVD_MAX_FETCH_RETRIES 
 const DEFAULT_DELAY_WITH_KEY_MS = Math.max(Number(process.env.NVD_DELAY_WITH_KEY_MS || 750) || 750, 0);
 const DEFAULT_DELAY_WITHOUT_KEY_MS = Math.max(Number(process.env.NVD_DELAY_WITHOUT_KEY_MS || 6500) || 6500, 0);
 const UPSERT_BATCH_SIZE = Math.max(Number(process.env.CVE_UPSERT_BATCH_SIZE || 50) || 50, 1);
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 function parseArgs(argv) {
   const args = {};
@@ -54,6 +55,15 @@ function resolveDelayMs(value) {
     return minimum;
   }
   return Math.max(Math.floor(numeric), minimum);
+}
+
+function deriveWindowDaysFromRange(startIso, endIso, fallback) {
+  const start = Date.parse(startIso);
+  const end = Date.parse(endIso);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return parsePositiveInteger(fallback, 30);
+  }
+  return Math.max(Math.ceil((end - start) / MS_PER_DAY), 1);
 }
 
 function firstEnglishDescription(descriptions = []) {
@@ -491,6 +501,7 @@ async function main() {
   const days = parsePositiveInteger(args.days || 30, 30);
   const endIso = args['end-date'] || now.toISOString();
   const startIso = args['start-date'] || new Date(now.getTime() - (days * 24 * 60 * 60 * 1000)).toISOString();
+  const reportingWindowDays = deriveWindowDaysFromRange(startIso, endIso, days);
   const windowType = String(args['window-type'] || process.env.DEFAULT_SYNC_WINDOW_TYPE || 'published').trim().toLowerCase() === 'modified' ? 'modified' : 'published';
   const rawMaxRecords = parseNonNegativeInteger(args['max-records'] ?? process.env.DEFAULT_SYNC_MAX_RECORDS ?? 0, 0);
   const maxRecords = rawMaxRecords === 0 ? Number.POSITIVE_INFINITY : rawMaxRecords;
@@ -513,7 +524,7 @@ async function main() {
       client.release();
     }
 
-    await refreshAnalyticsTables();
+    await refreshAnalyticsTables({ windowDays: reportingWindowDays });
 
     await pool.query(`
       UPDATE ingest_runs

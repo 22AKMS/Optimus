@@ -8,6 +8,7 @@ const NVD_MAX_FETCH_RETRIES = Math.max(Number(process.env.NVD_MAX_FETCH_RETRIES 
 const DEFAULT_DELAY_WITH_KEY_MS = Math.max(Number(process.env.NVD_DELAY_WITH_KEY_MS || 750) || 750, 0);
 const DEFAULT_DELAY_WITHOUT_KEY_MS = Math.max(Number(process.env.NVD_DELAY_WITHOUT_KEY_MS || 6500) || 6500, 0);
 const UPSERT_BATCH_SIZE = Math.max(Number(process.env.CVE_UPSERT_BATCH_SIZE || 50) || 50, 1);
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 function buildConfig() {
   const host = process.env.DB_HOST || (process.env.INSTANCE_CONNECTION_NAME ? `/cloudsql/${process.env.INSTANCE_CONNECTION_NAME}` : "127.0.0.1");
@@ -49,6 +50,22 @@ function resolveDelayMs(value) {
     return minimum;
   }
   return Math.max(Math.floor(numeric), minimum);
+}
+
+function recentWindowPredicate(columnSql, placeholderIndex) {
+  return `
+    ${columnSql} >= NOW() - ($${placeholderIndex}::int * INTERVAL '1 day')
+    AND ${columnSql} <= NOW()
+  `;
+}
+
+function deriveWindowDaysFromRange(startIso, endIso, fallback) {
+  const start = Date.parse(startIso);
+  const end = Date.parse(endIso);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return parsePositiveInteger(fallback, 30);
+  }
+  return Math.max(Math.ceil((end - start) / MS_PER_DAY), 1);
 }
 
 function firstEnglishDescription(descriptions = []) {
@@ -274,7 +291,7 @@ function parseCveRecord(wrapper) {
     references
   };
 }
-async function refreshAnalytics(client) {
+async function refreshAnalytics(client, windowDays) {
   await client.query(`
     UPDATE cves
     SET trending_score = ROUND((
@@ -302,8 +319,9 @@ async function refreshAnalytics(client) {
       MAX(cvss_base_score),
       ROUND(AVG(cvss_base_score)::numeric, 2)
     FROM cves
+    WHERE ${recentWindowPredicate("published_at", 1)}
     GROUP BY published_at::date, COALESCE(severity, 'UNKNOWN')
-  `);
+  `, [windowDays]);
 
   await client.query("TRUNCATE analytics_vendor_year");
   await client.query(`
@@ -319,8 +337,9 @@ async function refreshAnalytics(client) {
     JOIN cve_products cp ON cp.cve_id = c.id
     JOIN products p ON p.id = cp.product_id
     JOIN vendors v ON v.id = p.vendor_id
+    WHERE ${recentWindowPredicate("c.published_at", 1)}
     GROUP BY c.year, v.name, COALESCE(c.severity, 'UNKNOWN')
-  `);
+  `, [windowDays]);
 
   await client.query("TRUNCATE looker_daily_severity");
   await client.query(`
@@ -348,7 +367,8 @@ async function refreshAnalytics(client) {
       MAX(published_at)::date,
       MAX(last_modified_at)::date
     FROM cves
-    `);
+    WHERE ${recentWindowPredicate("published_at", 1)}
+    `, [windowDays]);
 
   await client.query("TRUNCATE looker_cve_overview");
   await client.query(`
@@ -382,7 +402,8 @@ async function refreshAnalytics(client) {
       ORDER BY v.name ASC, p.name ASC
       LIMIT 1
     ) primary_match ON TRUE
-    `);
+    WHERE ${recentWindowPredicate("c.published_at", 1)}
+    `, [windowDays]);
 
   await client.query("TRUNCATE looker_cve_explorer");
   await client.query(`
@@ -417,7 +438,8 @@ async function refreshAnalytics(client) {
       ORDER BY v.name ASC, p.name ASC
       LIMIT 1
     ) primary_match ON TRUE
-    `);
+    WHERE ${recentWindowPredicate("c.published_at", 1)}
+    `, [windowDays]);
 
 }
 
@@ -604,6 +626,7 @@ exports.syncRecentCves = async (req, res) => {
   const now = new Date();
   const endIso = req.body?.end_date || req.query.end_date || now.toISOString();
   const startIso = req.body?.start_date || req.query.start_date || new Date(now.getTime() - (days * 24 * 60 * 60 * 1000)).toISOString();
+  const reportingWindowDays = deriveWindowDaysFromRange(startIso, endIso, days);
   const headers = { "Accept": "application/json" };
   if (API_KEY) headers.apiKey = API_KEY;
 
@@ -646,7 +669,7 @@ exports.syncRecentCves = async (req, res) => {
 
       await client.query("BEGIN");
       try {
-        await refreshAnalytics(client);
+        await refreshAnalytics(client, reportingWindowDays);
         await client.query("COMMIT");
       } catch (error) {
         await client.query("ROLLBACK");
@@ -662,7 +685,7 @@ exports.syncRecentCves = async (req, res) => {
       WHERE id = $1
     `, [runId, records.length, `Synced ${records.length} CVEs using ${windowType} window from ${startIso} to ${endIso}${unlimitedWindow ? " (full window)" : ""}.`]);
 
-    res.json({ ok: true, synced: records.length, start_date: startIso, end_date: endIso, full_window: unlimitedWindow, days });
+    res.json({ ok: true, synced: records.length, start_date: startIso, end_date: endIso, full_window: unlimitedWindow, days, window_days: reportingWindowDays });
   } catch (error) {
     await pool.query(`
       UPDATE ingest_runs

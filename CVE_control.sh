@@ -436,11 +436,12 @@ trigger_sync() {
 
 trigger_analytics() {
   require_cloud_project || return
+  load_config
   local url
   url="$(function_url "$ANALYTICS_FUNCTION")"
   [[ -n "$url" ]] || { say "Could not find function URL for $ANALYTICS_FUNCTION."; return 1; }
-  say "Triggering $ANALYTICS_FUNCTION..."
-  curl -sS -X POST "$url" -H 'Content-Type: application/json' -d '{}' && echo
+  say "Triggering $ANALYTICS_FUNCTION for the last $SYNC_DAYS day(s)..."
+  curl -sS -X POST "$url" -H 'Content-Type: application/json' -d "{\"days\":$SYNC_DAYS}" && echo
 }
 
 show_menu() {

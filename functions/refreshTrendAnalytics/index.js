@@ -14,7 +14,21 @@ function buildConfig() {
 
 const pool = new Pool(buildConfig());
 
+function parsePositiveInteger(value, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(Math.floor(numeric), 1);
+}
+
+function recentWindowPredicate(columnSql, placeholderIndex) {
+  return `
+    ${columnSql} >= NOW() - ($${placeholderIndex}::int * INTERVAL '1 day')
+    AND ${columnSql} <= NOW()
+  `;
+}
+
 exports.refreshTrendAnalytics = async (req, res) => {
+  const windowDays = parsePositiveInteger(req.body?.days || req.query.days || process.env.DEFAULT_SYNC_WINDOW_DAYS || 30, 30);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -46,8 +60,9 @@ exports.refreshTrendAnalytics = async (req, res) => {
         MAX(cvss_base_score),
         ROUND(AVG(cvss_base_score)::numeric, 2)
       FROM cves
+      WHERE ${recentWindowPredicate("published_at", 1)}
       GROUP BY published_at::date, COALESCE(severity, 'UNKNOWN')
-    `);
+    `, [windowDays]);
 
     await client.query("TRUNCATE analytics_vendor_year");
     await client.query(`
@@ -63,8 +78,9 @@ exports.refreshTrendAnalytics = async (req, res) => {
       JOIN cve_products cp ON cp.cve_id = c.id
       JOIN products p ON p.id = cp.product_id
       JOIN vendors v ON v.id = p.vendor_id
+      WHERE ${recentWindowPredicate("c.published_at", 1)}
       GROUP BY c.year, v.name, COALESCE(c.severity, 'UNKNOWN')
-    `);
+    `, [windowDays]);
 
     await client.query("TRUNCATE looker_daily_severity");
     await client.query(`
@@ -92,7 +108,8 @@ exports.refreshTrendAnalytics = async (req, res) => {
         MAX(published_at)::date,
         MAX(last_modified_at)::date
       FROM cves
-    `);
+      WHERE ${recentWindowPredicate("published_at", 1)}
+    `, [windowDays]);
 
     await client.query("TRUNCATE looker_cve_overview");
     await client.query(`
@@ -126,7 +143,8 @@ exports.refreshTrendAnalytics = async (req, res) => {
         ORDER BY v.name ASC, p.name ASC
         LIMIT 1
       ) primary_match ON TRUE
-    `);
+      WHERE ${recentWindowPredicate("c.published_at", 1)}
+    `, [windowDays]);
 
     await client.query("TRUNCATE looker_cve_explorer");
     await client.query(`
@@ -161,10 +179,11 @@ exports.refreshTrendAnalytics = async (req, res) => {
         ORDER BY v.name ASC, p.name ASC
         LIMIT 1
       ) primary_match ON TRUE
-    `);
+      WHERE ${recentWindowPredicate("c.published_at", 1)}
+    `, [windowDays]);
 
     await client.query("COMMIT");
-    res.json({ ok: true });
+    res.json({ ok: true, window_days: windowDays });
   } catch (error) {
     await client.query("ROLLBACK");
     res.status(500).json({ error: error.message });

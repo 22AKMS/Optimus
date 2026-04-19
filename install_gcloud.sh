@@ -198,7 +198,7 @@ deploy_cloud_run_service() {
       --allow-unauthenticated \
       --service-account "$SA_EMAIL" \
       --add-cloudsql-instances "$INSTANCE_CONNECTION_NAME" \
-      --set-env-vars "APP_NAME=Optimus - A CVE Analysis Optimizer,APP_USER_ID=$APP_USER_ID,FIRESTORE_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=$FIRESTORE_DB,INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,NVD_API_KEY=$NVD_API_KEY,DEFAULT_SYNC_WINDOW_TYPE=published"; then
+      --set-env-vars "APP_NAME=Optimus - A CVE Analysis Optimizer,APP_USER_ID=$APP_USER_ID,FIRESTORE_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=$FIRESTORE_DB,INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,NVD_API_KEY=$NVD_API_KEY,DEFAULT_SYNC_WINDOW_TYPE=published,DEFAULT_SYNC_WINDOW_DAYS=$INITIAL_SYNC_DAYS"; then
       [[ -n "$output" ]] && echo "$output"
       return 0
     fi
@@ -492,7 +492,7 @@ if [[ "$ENABLE_LOOKER_STUDIO" == "yes" ]]; then
 fi
 
 log "Performing initial NVD sync"
-DB_HOST=127.0.0.1 DB_PORT="$PROXY_PORT" DB_USER="$DB_USER" DB_NAME="$DB_NAME" DB_PASSWORD="$DB_PASSWORD" NVD_API_KEY="$NVD_API_KEY" DEFAULT_SYNC_WINDOW_TYPE=published DEFAULT_SYNC_MAX_RECORDS=0 node scripts/syncNvdToDb.js --days="$INITIAL_SYNC_DAYS" --window-type=published --max-records=0
+DB_HOST=127.0.0.1 DB_PORT="$PROXY_PORT" DB_USER="$DB_USER" DB_NAME="$DB_NAME" DB_PASSWORD="$DB_PASSWORD" NVD_API_KEY="$NVD_API_KEY" DEFAULT_SYNC_WINDOW_TYPE=published DEFAULT_SYNC_WINDOW_DAYS="$INITIAL_SYNC_DAYS" DEFAULT_SYNC_MAX_RECORDS=0 node scripts/syncNvdToDb.js --days="$INITIAL_SYNC_DAYS" --window-type=published --max-records=0
 
 log "Ensuring service account exists"
 ensure_service_account_exists
@@ -505,10 +505,10 @@ log "Deploying Cloud Run service"
 deploy_cloud_run_service
 
 log "Deploying function $SYNC_FUNCTION"
-deploy_function_with_retry SYNC_FUNCTION "functions/syncRecentCves" "syncRecentCves" "INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,NVD_API_KEY=$NVD_API_KEY,DEFAULT_SYNC_WINDOW_TYPE=published,DEFAULT_SYNC_MAX_RECORDS=0" "Sync function name"
+deploy_function_with_retry SYNC_FUNCTION "functions/syncRecentCves" "syncRecentCves" "INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,NVD_API_KEY=$NVD_API_KEY,DEFAULT_SYNC_WINDOW_TYPE=published,DEFAULT_SYNC_WINDOW_DAYS=$INITIAL_SYNC_DAYS,DEFAULT_SYNC_MAX_RECORDS=0" "Sync function name"
 
 log "Deploying function $ANALYTICS_FUNCTION"
-deploy_function_with_retry ANALYTICS_FUNCTION "functions/refreshTrendAnalytics" "refreshTrendAnalytics" "INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD" "Analytics function name"
+deploy_function_with_retry ANALYTICS_FUNCTION "functions/refreshTrendAnalytics" "refreshTrendAnalytics" "INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,DEFAULT_SYNC_WINDOW_DAYS=$INITIAL_SYNC_DAYS" "Analytics function name"
 
 SYNC_RUN_SERVICE="$(gcloud functions describe "$SYNC_FUNCTION" --project "$PROJECT_ID" --gen2 --region "$REGION" --format='value(serviceConfig.service)' | awk -F/ '{print $NF}')"
 ANALYTICS_RUN_SERVICE="$(gcloud functions describe "$ANALYTICS_FUNCTION" --project "$PROJECT_ID" --gen2 --region "$REGION" --format='value(serviceConfig.service)' | awk -F/ '{print $NF}')"
