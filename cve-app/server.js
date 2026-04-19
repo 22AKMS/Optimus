@@ -55,20 +55,21 @@ app.get("/cves/:cveId", (req, res) => {
 
 app.get("/api/analytics/overview", async (req, res) => {
   try {
+    const requestedDays = Number(req.query.days || 30);
+    const recentWindowDays = Math.min(Math.max(Number.isFinite(requestedDays) ? requestedDays : 30, 1), 3650);
     const severityExpr = normalizedSeveritySql("severity", "cvss_base_score");
     const overviewResult = await query(`
       SELECT
         COUNT(*)::int AS total_cves,
         COUNT(*) FILTER (WHERE ${severityExpr} = 'CRITICAL')::int AS critical_cves,
         COUNT(*) FILTER (WHERE ${severityExpr} = 'HIGH')::int AS high_cves,
-        COUNT(*) FILTER (WHERE published_at >= NOW() - INTERVAL '30 days')::int AS recent_cves,
+        COUNT(*) FILTER (WHERE published_at >= NOW() - ($1::int * INTERVAL '1 day'))::int AS recent_cves,
         COUNT(*) FILTER (WHERE has_kev)::int AS kev_cves,
-        ROUND(AVG(cvss_base_score)::numeric, 1) AS avg_cvss,
-        MAX(cvss_base_score) AS max_cvss,
+        COUNT(*) FILTER (WHERE product_count > 0)::int AS normalized_cves,
         MAX(published_at) AS latest_published_at,
         MAX(last_modified_at) AS latest_modified_at
       FROM cves
-    `);
+    `, [recentWindowDays]);
 
     const latestRun = await query(`
       SELECT started_at, finished_at, status, cve_count, note
@@ -79,7 +80,8 @@ app.get("/api/analytics/overview", async (req, res) => {
 
     res.json({
       overview: overviewResult.rows[0],
-      latest_run: latestRun.rows[0] || null
+      latest_run: latestRun.rows[0] || null,
+      recent_window_days: recentWindowDays
     });
   } catch (error) {
     res.status(500).json({ error: error.message });

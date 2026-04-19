@@ -130,6 +130,16 @@ tail_cloud_logs() {
   gcloud run services logs read "$APP_SERVICE" --region "$REGION" --limit=50
 }
 
+update_cloud_app() {
+  require_cloud_project || return
+  say "Deploying the latest source from $ROOT_DIR to Cloud Run service $APP_SERVICE in $REGION..."
+  gcloud run deploy "$APP_SERVICE" --region "$REGION" --source "$ROOT_DIR"
+  say "Cloud Run web app update completed."
+  local url
+  url="$(gcloud run services describe "$APP_SERVICE" --region "$REGION" --format='value(status.url)' 2>/dev/null || true)"
+  [[ -n "$url" ]] && say "URL: $url"
+}
+
 
 run_service_json() {
   gcloud run services describe "$APP_SERVICE" --region "$REGION" --format=json 2>/dev/null || true
@@ -162,9 +172,9 @@ show_dashboard_url() {
   local current
   current="$(current_dashboard_url)"
   if [[ -n "$current" ]]; then
-    say "Shared dashboard URL: $current"
+    say "Shared Looker Studio URL: $current"
   else
-    say "No shared dashboard URL is configured on $APP_SERVICE."
+    say "No shared Looker Studio URL is configured on $APP_SERVICE."
   fi
 }
 
@@ -174,7 +184,7 @@ set_dashboard_url() {
   validate_http_url "$url" || return 1
   say "Updating shared Looker Studio URL on $APP_SERVICE..."
   gcloud run services update "$APP_SERVICE" --region "$REGION" --update-env-vars "^~^SHARED_LOOKER_STUDIO_URL=$url" >/dev/null
-  say "Shared dashboard URL updated. It will appear in the app after the new revision becomes ready."
+  say "Shared Looker Studio URL updated. It will appear in the app after the new revision becomes ready."
   show_dashboard_url
 }
 
@@ -182,7 +192,7 @@ clear_dashboard_url() {
   require_cloud_project || return
   say "Removing shared Looker Studio URL from $APP_SERVICE..."
   gcloud run services update "$APP_SERVICE" --region "$REGION" --remove-env-vars SHARED_LOOKER_STUDIO_URL >/dev/null
-  say "Shared dashboard URL removed from the app."
+  say "Shared Looker Studio URL removed from the app."
 }
 
 
@@ -305,35 +315,50 @@ show_menu() {
   cat <<'MENU'
 
 Optimus control panel
-1) Show cloud status
-2) Show cloud URL
-3) Tail cloud logs
-4) Trigger syncRecentCves with saved days/max CVE settings
-5) Set sync window days
-6) Set max CVEs per sync
-7) Show sync settings
-8) Trigger refreshTrendAnalytics
-9) Show shared dashboard URL
-10) Set or change shared dashboard URL
-11) Remove shared dashboard URL
-12) Show NVD API key status
-13) Set or change NVD API key
-14) Remove NVD API key
-15) Start Cloud Run web app
-16) Stop Cloud Run web app
-17) Cloud web app status
-18) Exit
+
+[Cloud Run App]
+1) Show Cloud Run status table
+2) Show Cloud Run URL
+3) Tail Cloud Run logs
+4) Update Cloud Run web app from current source
+5) Start Cloud Run web app
+6) Stop Cloud Run web app
+7) Show Cloud Run scaling status
+
+[Sync And Analytics]
+8) Trigger syncRecentCves with saved days/max CVE settings
+9) Set sync window days
+10) Set max CVEs per sync
+11) Show sync settings
+12) Trigger refreshTrendAnalytics
+
+[Looker Studio]
+13) Show shared Looker Studio URL
+14) Set or change shared Looker Studio URL
+15) Remove shared Looker Studio URL
+
+[NVD API Key]
+16) Show NVD API key status
+17) Set or change NVD API key
+18) Remove NVD API key
+
+[Exit]
+19) Exit
 MENU
 }
 
 load_config
 
 case "${1:-}" in
+  app-update|cloud-update) update_cloud_app; exit 0 ;;
   cloud-start) start_cloud_app; exit 0 ;;
   cloud-stop) stop_cloud_app; exit 0 ;;
   cloud-status) cloud_app_status; exit 0 ;;
   sync) trigger_sync "${2:-}" "${3:-}"; exit 0 ;;
   analytics) trigger_analytics; exit 0 ;;
+  lookerstudio-show) show_dashboard_url; exit 0 ;;
+  lookerstudio-set) [[ -n "${2:-}" ]] || { say "Usage: ./CVE_control.sh lookerstudio-set <https://...>"; exit 1; }; set_dashboard_url "$2"; exit 0 ;;
+  lookerstudio-clear) clear_dashboard_url; exit 0 ;;
   dashboard-show) show_dashboard_url; exit 0 ;;
   dashboard-set) [[ -n "${2:-}" ]] || { say "Usage: ./CVE_control.sh dashboard-set <https://...>"; exit 1; }; set_dashboard_url "$2"; exit 0 ;;
   dashboard-clear) clear_dashboard_url; exit 0 ;;
@@ -352,33 +377,34 @@ while true; do
     1) show_cloud_status ;;
     2) show_cloud_url ;;
     3) tail_cloud_logs ;;
-    4) trigger_sync ;;
-    5)
+    4) update_cloud_app ;;
+    5) start_cloud_app ;;
+    6) stop_cloud_app ;;
+    7) cloud_app_status ;;
+    8) trigger_sync ;;
+    9)
       read -r -p 'Enter sync window days (1-30): ' value
       set_sync_days "$value"
       ;;
-    6)
+    10)
       read -r -p 'Enter max CVEs per sync (0 = full day window): ' value
       set_sync_max_records "$value"
       ;;
-    7) show_sync_config ;;
-    8) trigger_analytics ;;
-    9) show_dashboard_url ;;
-    10)
+    11) show_sync_config ;;
+    12) trigger_analytics ;;
+    13) show_dashboard_url ;;
+    14)
       read -r -p 'Enter the shared Looker Studio URL: ' value
       set_dashboard_url "$value"
       ;;
-    11) clear_dashboard_url ;;
-    12) show_nvd_api_key ;;
-    13)
+    15) clear_dashboard_url ;;
+    16) show_nvd_api_key ;;
+    17)
       read -r -p 'Enter the NVD API key: ' value
       set_nvd_api_key "$value"
       ;;
-    14) clear_nvd_api_key ;;
-    15) start_cloud_app ;;
-    16) stop_cloud_app ;;
-    17) cloud_app_status ;;
-    18) exit 0 ;;
+    18) clear_nvd_api_key ;;
+    19) exit 0 ;;
     *) say "Invalid choice." ;;
   esac
 done
