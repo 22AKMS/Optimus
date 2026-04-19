@@ -8,9 +8,20 @@ try {
 
 const { refreshAnalyticsTables } = require("../lib/analytics");
 
+function parseArgs(argv) {
+  const args = {};
+  for (const entry of argv) {
+    if (!entry.startsWith("--")) continue;
+    const [rawKey, rawValue] = entry.slice(2).split("=");
+    args[rawKey] = rawValue === undefined ? true : rawValue;
+  }
+  return args;
+}
+
 async function main() {
-  await refreshAnalyticsTables();
-  console.log("Analytics refresh complete.");
+  const args = parseArgs(process.argv.slice(2));
+  const result = await refreshAnalyticsTables({ windowDays: args.days });
+  console.log(`Analytics refresh complete for the last ${result.window_days} day(s).`);
 }
 
 main().catch((error) => {

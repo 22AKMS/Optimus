@@ -2,7 +2,7 @@ const state = {
   cves: [],
   severities: ["CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE", "UNKNOWN"],
   years: [],
-  syncWindowDays: 30,
+  windowDays: 30,
   pagination: {
     page: 1,
     limit: 40,
@@ -169,16 +169,16 @@ function highSeverityCard(cve) {
 function renderOverview(payload) {
   const overview = payload.overview || {};
   const latestRun = payload.latest_run || null;
-  const syncWindowDays = Number(payload.sync_window_days || state.syncWindowDays || 30);
+  const windowDays = Number(payload.window_days || state.windowDays || 30);
   const totalCves = Number(overview.total_cves || 0);
   const normalizedCves = Number(overview.normalized_cves || 0);
   const normalizedShare = totalCves ? Math.round((normalizedCves / totalCves) * 100) : 0;
   const grid = document.getElementById("overviewGrid");
 
-  state.syncWindowDays = syncWindowDays;
+  state.windowDays = windowDays;
 
   const cards = [
-    statCard("Total CVEs", formatCount(totalCves), `${formatCount(overview.recent_cves || 0)} published in the last ${pluralizeDayLabel(syncWindowDays)}`),
+    statCard("Total CVEs", formatCount(totalCves)),
     statCard("Critical CVEs", formatCount(overview.critical_cves || 0), `${formatCount(overview.high_cves || 0)} high severity CVEs`),
     statCard("Known Exploited", formatCount(overview.kev_cves || 0), "CISA KEV-matched items"),
     statCard("Oldest Publish Date", overview.oldest_published_at ? formatDate(overview.oldest_published_at) : "No data", lastSyncDetail(latestRun)),
@@ -296,6 +296,7 @@ async function loadCves(page = 1) {
   const filters = currentQueryState();
   const params = new URLSearchParams();
 
+  if (filters.days) params.set("days", filters.days);
   if (filters.search) params.set("search", filters.search);
   if (filters.product) params.set("product", filters.product);
   if (filters.severity) params.set("severity", filters.severity);
@@ -318,11 +319,15 @@ async function loadCves(page = 1) {
 }
 
 async function loadHighSeverity() {
-  const data = await fetchJson("/api/high-severity");
+  const params = new URLSearchParams();
+  const { days } = currentQueryState();
+  if (days) params.set("days", days);
+  const query = params.toString();
+  const data = await fetchJson(query ? `/api/high-severity?${query}` : "/api/high-severity");
   const target = document.getElementById("highSeverityList");
 
   if (!data.items || !data.items.length) {
-    target.innerHTML = '<div class="empty-state">No high-severity CVEs yet.</div>';
+    target.innerHTML = '<div class="empty-state">No high-severity CVEs in this window.</div>';
     return;
   }
 
@@ -330,14 +335,19 @@ async function loadHighSeverity() {
 }
 
 async function loadOverview() {
-  const data = await fetchJson("/api/analytics/overview");
+  const params = new URLSearchParams();
+  const { days } = currentQueryState();
+  if (days) params.set("days", days);
+  const query = params.toString();
+  const data = await fetchJson(query ? `/api/analytics/overview?${query}` : "/api/analytics/overview");
   renderOverview(data);
 }
 
 async function refreshDashboard(page = 1) {
   await Promise.all([
     loadOverview(),
-    loadCves(page)
+    loadCves(page),
+    loadHighSeverity()
   ]);
 }
 
@@ -355,9 +365,5 @@ for (const inputId of ["searchInput", "productInput"]) {
 
 window.addEventListener("DOMContentLoaded", async () => {
   const initial = readInitialFilters();
-  await Promise.all([
-    loadOverview(),
-    loadCves(initial.page || 1),
-    loadHighSeverity()
-  ]);
+  await refreshDashboard(initial.page || 1);
 });
