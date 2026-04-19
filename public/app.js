@@ -106,7 +106,7 @@ function pluralizeDayLabel(days) {
 }
 
 function recentWindowDetail(days) {
-  return `Window: last ${pluralizeDayLabel(days)} (calendar)`;
+  return `Window: last ${pluralizeDayLabel(days)} (rolling)`;
 }
 
 function lastSyncDetail(latestRun) {

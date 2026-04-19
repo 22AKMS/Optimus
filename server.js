@@ -23,8 +23,8 @@ function parseRecentWindowDays(value, fallback = 30) {
 
 function recentWindowPredicate(columnSql, placeholderIndex) {
   return `
-    ${columnSql} >= CURRENT_DATE - (($${placeholderIndex}::int - 1) * INTERVAL '1 day')
-    AND ${columnSql} < CURRENT_DATE + INTERVAL '1 day'
+    ${columnSql} >= NOW() - ($${placeholderIndex}::int * INTERVAL '1 day')
+    AND ${columnSql} <= NOW()
   `;
 }
 
