@@ -2,6 +2,7 @@ const state = {
   cves: [],
   severities: ["CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE", "UNKNOWN"],
   years: [],
+  syncWindowDays: 30,
   pagination: {
     page: 1,
     limit: 40,
@@ -33,7 +34,7 @@ function escapeHtml(value) {
 function excerpt(text, size = 190) {
   const value = String(text || "").trim();
   if (value.length <= size) return value;
-  return `${value.slice(0, size).trim()}…`;
+  return `${value.slice(0, size).trim()}...`;
 }
 
 function severityClass(severity) {
@@ -43,6 +44,10 @@ function severityClass(severity) {
 function formatDate(value) {
   if (!value) return "Unknown date";
   return new Date(value).toLocaleDateString();
+}
+
+function formatCount(value) {
+  return Number(value || 0).toLocaleString();
 }
 
 function scoreLabel(score) {
@@ -83,7 +88,7 @@ function exploitSummary(cve) {
   if (!parts.length && isKnownValue(cve.vuln_status)) {
     parts.push(humanizeMetric(cve.vuln_status));
   }
-  return parts.slice(0, 3).join(" · ") || "Structured product data pending";
+  return parts.slice(0, 3).join(" | ") || "Structured product data pending";
 }
 
 function targetLabel(cve) {
@@ -91,9 +96,22 @@ function targetLabel(cve) {
     .map((value) => String(value || "").trim())
     .filter(isKnownValue);
 
-  if (parts.length === 2) return `${parts[0]} · ${parts[1]}`;
+  if (parts.length === 2) return `${parts[0]} | ${parts[1]}`;
   if (parts.length === 1) return parts[0];
   return exploitSummary(cve);
+}
+
+function pluralizeDayLabel(days) {
+  return `${days} day${days === 1 ? "" : "s"}`;
+}
+
+function lastSyncDetail(latestRun) {
+  if (!latestRun) {
+    return "Run syncRecentCves after deploy";
+  }
+  const syncCount = Number(latestRun.cve_count || 0);
+  const countText = syncCount ? ` (${formatCount(syncCount)} CVEs)` : "";
+  return `Last sync: ${latestRun.status}${countText}`;
 }
 
 function statCard(label, value, detail = "") {
@@ -125,7 +143,7 @@ function cveCard(cve) {
           ${cve.has_kev ? '<span class="badge severity-critical">KEV</span>' : ""}
         </div>
         <p class="muted compact">Published ${escapeHtml(formatDate(cve.published_at))}</p>
-        <a class="inline-link" href="/cves/${encodeURIComponent(cve.id)}">Open details →</a>
+        <a class="inline-link" href="/cves/${encodeURIComponent(cve.id)}">Open details -></a>
       </div>
     </article>
   `;
@@ -151,15 +169,22 @@ function highSeverityCard(cve) {
 function renderOverview(payload) {
   const overview = payload.overview || {};
   const latestRun = payload.latest_run || null;
+  const syncWindowDays = Number(payload.sync_window_days || state.syncWindowDays || 30);
+  const totalCves = Number(overview.total_cves || 0);
+  const normalizedCves = Number(overview.normalized_cves || 0);
+  const normalizedShare = totalCves ? Math.round((normalizedCves / totalCves) * 100) : 0;
   const grid = document.getElementById("overviewGrid");
+
+  state.syncWindowDays = syncWindowDays;
+
   const cards = [
-    statCard("Total CVEs", overview.total_cves || 0, `${overview.recent_cves || 0} published in the last 30 days`),
-    statCard("Critical CVEs", overview.critical_cves || 0, `${overview.high_cves || 0} high severity CVEs`),
-    statCard("Known Exploited", overview.kev_cves || 0, "CISA KEV-matched items"),
-    statCard("Average CVSS", scoreLabel(overview.avg_cvss), `Highest score ${scoreLabel(overview.max_cvss)}`),
-    statCard("Latest Publish Date", overview.latest_published_at ? formatDate(overview.latest_published_at) : "No data", latestRun ? `Last sync: ${latestRun.status}` : "Run syncRecentCves after deploy"),
-    statCard("Latest NVD Update", overview.latest_modified_at ? formatDate(overview.latest_modified_at) : "No data", "Most recently modified CVE in the catalog")
+    statCard("Total CVEs", formatCount(totalCves), `${formatCount(overview.recent_cves || 0)} published in the last ${pluralizeDayLabel(syncWindowDays)}`),
+    statCard("Critical CVEs", formatCount(overview.critical_cves || 0), `${formatCount(overview.high_cves || 0)} high severity CVEs`),
+    statCard("Known Exploited", formatCount(overview.kev_cves || 0), "CISA KEV-matched items"),
+    statCard("Oldest Publish Date", overview.oldest_published_at ? formatDate(overview.oldest_published_at) : "No data", lastSyncDetail(latestRun)),
+    statCard("Normalized Software", formatCount(normalizedCves), `${normalizedShare}% of catalog mapped to products`)
   ];
+
   grid.innerHTML = cards.join("");
 }
 
@@ -187,7 +212,8 @@ function renderCves() {
   const { page, limit, total_items: totalItems } = state.pagination;
   const start = totalItems ? ((page - 1) * limit) + 1 : 0;
   const end = totalItems ? Math.min(page * limit, totalItems) : 0;
-  count.textContent = totalItems ? `${start}-${end} of ${totalItems}` : "0 results";
+
+  count.textContent = totalItems ? `${formatCount(start)}-${formatCount(end)} of ${formatCount(totalItems)}` : "0 results";
 
   if (!state.cves.length) {
     grid.innerHTML = '<div class="panel empty-state">No CVEs matched your filters. Try a broader search or run a fresh NVD sync.</div>';
@@ -201,6 +227,7 @@ function currentQueryState() {
   return {
     search: document.getElementById("searchInput").value.trim(),
     product: document.getElementById("productInput").value.trim(),
+    days: document.getElementById("daysSelect").value,
     severity: document.getElementById("severitySelect").value,
     year: document.getElementById("yearSelect").value,
     sort: document.getElementById("sortSelect").value,
@@ -229,6 +256,7 @@ function readInitialFilters() {
 
   document.getElementById("searchInput").value = get("search");
   document.getElementById("productInput").value = get("product");
+  document.getElementById("daysSelect").value = get("days", "30");
   document.getElementById("sortSelect").value = get("sort", "newest");
   document.getElementById("directionSelect").value = get("direction", "desc");
   document.getElementById("normalizedOnlyToggle").checked = ["1", "true", "yes", "on"].includes(get("normalized_only").toLowerCase());
@@ -240,8 +268,8 @@ function readInitialFilters() {
   };
 }
 
-function renderPagination() {
-  const pagination = document.getElementById("paginationControls");
+function renderInlinePager() {
+  const pagination = document.getElementById("inlinePager");
   const { page, page_count: pageCount, has_prev: hasPrev, has_next: hasNext, total_items: totalItems } = state.pagination;
 
   if (!totalItems || pageCount <= 1) {
@@ -249,28 +277,10 @@ function renderPagination() {
     return;
   }
 
-  const pages = new Set([1, pageCount, page - 1, page, page + 1].filter((value) => value >= 1 && value <= pageCount));
-  const orderedPages = Array.from(pages).sort((left, right) => left - right);
-  const buttons = [];
-  let previous = 0;
-
-  for (const value of orderedPages) {
-    if (previous && value - previous > 1) {
-      buttons.push('<span class="pagination-ellipsis">…</span>');
-    }
-    buttons.push(`
-      <button type="button" class="pagination-button ${value === page ? 'active' : ''}" data-page="${value}">${value}</button>
-    `);
-    previous = value;
-  }
-
   pagination.innerHTML = `
-    <div class="pagination-summary muted">Page ${page} of ${pageCount}</div>
-    <div class="pagination-row">
-      <button type="button" class="pagination-button" data-page="${page - 1}" ${hasPrev ? "" : "disabled"}>← Previous</button>
-      ${buttons.join("")}
-      <button type="button" class="pagination-button" data-page="${page + 1}" ${hasNext ? "" : "disabled"}>Next →</button>
-    </div>
+    <span class="pagination-summary muted">Page ${formatCount(page)} of ${formatCount(pageCount)}</span>
+    <button type="button" class="pagination-button pagination-button-inline" data-page="${page - 1}" ${hasPrev ? "" : "disabled"}>Back</button>
+    <button type="button" class="pagination-button pagination-button-inline" data-page="${page + 1}" ${hasNext ? "" : "disabled"}>Next</button>
   `;
 
   pagination.querySelectorAll("button[data-page]").forEach((button) => {
@@ -303,7 +313,7 @@ async function loadCves(page = 1) {
   state.pagination = data.pagination || state.pagination;
   renderFilters(filters.severity, filters.year);
   renderCves();
-  renderPagination();
+  renderInlinePager();
   syncUrl(state.pagination.page || page);
 }
 
@@ -324,21 +334,30 @@ async function loadOverview() {
   renderOverview(data);
 }
 
+async function refreshDashboard(page = 1) {
+  await Promise.all([
+    loadOverview(),
+    loadCves(page)
+  ]);
+}
+
 document.getElementById("searchButton").addEventListener("click", () => {
-  loadCves(1).catch(console.error);
+  refreshDashboard(1).catch(console.error);
 });
 
 for (const inputId of ["searchInput", "productInput"]) {
   document.getElementById(inputId).addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
-      loadCves(1).catch(console.error);
+      refreshDashboard(1).catch(console.error);
     }
   });
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
   const initial = readInitialFilters();
-  await loadOverview();
-  await loadCves(initial.page || 1);
-  await loadHighSeverity();
+  await Promise.all([
+    loadOverview(),
+    loadCves(initial.page || 1),
+    loadHighSeverity()
+  ]);
 });

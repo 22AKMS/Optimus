@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "seed": "node scripts/syncNvdToDb.js --days=30 --max-records=300",
+    "seed": "node scripts/syncNvdToDb.js --days=30 --max-records=0",
     "refresh-analytics": "node scripts/refreshAnalytics.js"
   },
   "engines": {
