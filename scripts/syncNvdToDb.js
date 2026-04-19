@@ -11,6 +11,12 @@ const { refreshAnalyticsTables } = require("../lib/analytics");
 
 const API_BASE = process.env.NVD_API_BASE || "https://services.nvd.nist.gov/rest/json/cves/2.0";
 const API_KEY = process.env.NVD_API_KEY || "";
+const NVD_RESULTS_PER_PAGE = Math.max(Number(process.env.NVD_RESULTS_PER_PAGE || 2000) || 2000, 1);
+const NVD_FETCH_TIMEOUT_MS = Math.max(Number(process.env.NVD_FETCH_TIMEOUT_MS || 120000) || 120000, 1000);
+const NVD_MAX_FETCH_RETRIES = Math.max(Number(process.env.NVD_MAX_FETCH_RETRIES || 3) || 3, 1);
+const DEFAULT_DELAY_WITH_KEY_MS = Math.max(Number(process.env.NVD_DELAY_WITH_KEY_MS || 750) || 750, 0);
+const DEFAULT_DELAY_WITHOUT_KEY_MS = Math.max(Number(process.env.NVD_DELAY_WITHOUT_KEY_MS || 6500) || 6500, 0);
+const UPSERT_BATCH_SIZE = Math.max(Number(process.env.CVE_UPSERT_BATCH_SIZE || 50) || 50, 1);
 
 function parseArgs(argv) {
   const args = {};
@@ -24,6 +30,30 @@ function parseArgs(argv) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parsePositiveInteger(value, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(Math.floor(numeric), 1);
+}
+
+function parseNonNegativeInteger(value, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(Math.floor(numeric), 0);
+}
+
+function resolveDelayMs(value) {
+  const minimum = API_KEY ? DEFAULT_DELAY_WITH_KEY_MS : DEFAULT_DELAY_WITHOUT_KEY_MS;
+  if (value === undefined || value === null || value === "") {
+    return minimum;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return minimum;
+  }
+  return Math.max(Math.floor(numeric), minimum);
 }
 
 function firstEnglishDescription(descriptions = []) {
@@ -132,15 +162,18 @@ function parseCveRecord(wrapper) {
     }
   }
 
-  const references = [];
+  const referenceMap = new Map();
   for (const ref of cve.references || []) {
     if (!ref.url) continue;
-    references.push({
-      url: ref.url,
-      source: ref.source || null,
-      tags: Array.isArray(ref.tags) ? ref.tags : []
-    });
+    if (!referenceMap.has(ref.url)) {
+      referenceMap.set(ref.url, {
+        url: ref.url,
+        source: ref.source || null,
+        tags: Array.isArray(ref.tags) ? ref.tags : []
+      });
+    }
   }
+  const references = Array.from(referenceMap.values());
 
   const score = cvssData.baseScore ?? null;
   const severity = normalizeSeverity(metric?.baseSeverity || cvssData.baseSeverity || wrapper.cve?.metrics?.cvssMetricV2?.[0]?.baseSeverity, score);
@@ -189,23 +222,61 @@ function buildWindowParams({ windowType, startIso, endIso }) {
   };
 }
 
-async function fetchPage({ headers, windowType, startIso, endIso, startIndex = 0, resultsPerPage = null }) {
+function isRetryableStatus(status) {
+  return status === 429 || status >= 500;
+}
+
+function isRetryableFetchError(error) {
+  return error?.name === "AbortError"
+    || error?.name === "TimeoutError"
+    || error?.code === "ECONNRESET"
+    || error?.code === "ETIMEDOUT"
+    || error?.code === "UND_ERR_CONNECT_TIMEOUT"
+    || error?.code === "UND_ERR_HEADERS_TIMEOUT"
+    || error?.code === "UND_ERR_BODY_TIMEOUT";
+}
+
+function retryDelayMs(attempt) {
+  const baseDelay = API_KEY ? 1200 : DEFAULT_DELAY_WITHOUT_KEY_MS;
+  return baseDelay * (attempt + 1);
+}
+
+async function fetchPage({ headers, windowType, startIso, endIso, startIndex = 0, resultsPerPage = NVD_RESULTS_PER_PAGE }) {
   const url = new URL(API_BASE);
   const keys = buildWindowParams({ windowType, startIso, endIso });
   url.searchParams.set(keys.startKey, startIso);
   url.searchParams.set(keys.endKey, endIso);
   url.searchParams.set("startIndex", String(startIndex));
-  if (resultsPerPage) {
-    url.searchParams.set("resultsPerPage", String(resultsPerPage));
+  url.searchParams.set("resultsPerPage", String(resultsPerPage || NVD_RESULTS_PER_PAGE));
+
+  for (let attempt = 0; attempt < NVD_MAX_FETCH_RETRIES; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), NVD_FETCH_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(url, { headers, signal: controller.signal });
+      if (!response.ok) {
+        const payload = await response.text();
+        if (attempt < NVD_MAX_FETCH_RETRIES - 1 && isRetryableStatus(response.status)) {
+          await sleep(retryDelayMs(attempt));
+          continue;
+        }
+        throw new Error(`NVD request failed (${response.status}): ${payload}`);
+      }
+
+      return response.json();
+    } catch (error) {
+      if (attempt < NVD_MAX_FETCH_RETRIES - 1 && isRetryableFetchError(error)) {
+        await sleep(retryDelayMs(attempt));
+        continue;
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
-  const response = await fetch(url, { headers });
-  if (!response.ok) {
-    const payload = await response.text();
-    throw new Error(`NVD request failed (${response.status}): ${payload}`);
-  }
-
-  return response.json();
+  throw new Error(`NVD request failed after ${NVD_MAX_FETCH_RETRIES} attempts.`);
 }
 
 async function fetchWindow({ startIso, endIso, windowType = "published", maxRecords = 300, maxPages = 10, delayMs = 6500 }) {
@@ -214,7 +285,7 @@ async function fetchWindow({ startIso, endIso, windowType = "published", maxReco
     headers.apiKey = API_KEY;
   }
 
-  const firstPayload = await fetchPage({ headers, windowType, startIso, endIso, startIndex: 0 });
+  const firstPayload = await fetchPage({ headers, windowType, startIso, endIso, startIndex: 0, resultsPerPage: NVD_RESULTS_PER_PAGE });
   const firstVulnerabilities = Array.isArray(firstPayload.vulnerabilities) ? firstPayload.vulnerabilities : [];
   const pageSize = Number(firstPayload.resultsPerPage || firstVulnerabilities.length || 0) || 1;
   const totalResults = Number(firstPayload.totalResults || firstVulnerabilities.length || 0);
@@ -245,7 +316,41 @@ async function fetchWindow({ startIso, endIso, windowType = "published", maxReco
   return allRecords;
 }
 
-async function upsertCveRecord(client, record) {
+async function getVendorId(client, vendorName, lookupCache) {
+  if (lookupCache.vendorIds.has(vendorName)) {
+    return lookupCache.vendorIds.get(vendorName);
+  }
+
+  const vendorResult = await client.query(`
+    INSERT INTO vendors (name)
+    VALUES ($1)
+    ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+    RETURNING id
+  `, [vendorName]);
+  const vendorId = vendorResult.rows[0].id;
+  lookupCache.vendorIds.set(vendorName, vendorId);
+  return vendorId;
+}
+
+async function getProductId(client, vendorId, product, lookupCache) {
+  const cacheKey = `${vendorId}::${product.product_name}`;
+  const cached = lookupCache.productIds.get(cacheKey);
+  if (cached && cached.cpeUri === product.cpe_uri) {
+    return cached.id;
+  }
+
+  const productResult = await client.query(`
+    INSERT INTO products (vendor_id, name, cpe_uri)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (vendor_id, name) DO UPDATE SET cpe_uri = EXCLUDED.cpe_uri
+    RETURNING id
+  `, [vendorId, product.product_name, product.cpe_uri]);
+  const productId = productResult.rows[0].id;
+  lookupCache.productIds.set(cacheKey, { id: productId, cpeUri: product.cpe_uri });
+  return productId;
+}
+
+async function upsertCveRecord(client, record, lookupCache) {
   await client.query(`
     INSERT INTO cves (
       id, source_identifier, published_at, last_modified_at, vuln_status, description,
@@ -320,21 +425,8 @@ async function upsertCveRecord(client, record) {
   await client.query("DELETE FROM cve_references WHERE cve_id = $1", [record.id]);
 
   for (const product of record.products) {
-    const vendorResult = await client.query(`
-      INSERT INTO vendors (name)
-      VALUES ($1)
-      ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-      RETURNING id
-    `, [product.vendor_name]);
-    const vendorId = vendorResult.rows[0].id;
-
-    const productResult = await client.query(`
-      INSERT INTO products (vendor_id, name, cpe_uri)
-      VALUES ($1, $2, $3)
-      ON CONFLICT (vendor_id, name) DO UPDATE SET cpe_uri = EXCLUDED.cpe_uri
-      RETURNING id
-    `, [vendorId, product.product_name, product.cpe_uri]);
-    const productId = productResult.rows[0].id;
+    const vendorId = await getVendorId(client, product.vendor_name, lookupCache);
+    const productId = await getProductId(client, vendorId, product, lookupCache);
 
     await client.query(`
       INSERT INTO cve_products (
@@ -370,29 +462,40 @@ async function upsertCveRecord(client, record) {
       ON CONFLICT (cve_id, url) DO UPDATE SET source = EXCLUDED.source, tags = EXCLUDED.tags
     `, [record.id, ref.url, ref.source, ref.tags]);
   }
+}
 
-  await client.query(`
-    UPDATE cves
-    SET
-      reference_count = (SELECT COUNT(*) FROM cve_references WHERE cve_id = $1),
-      product_count = (SELECT COUNT(*) FROM cve_products WHERE cve_id = $1),
-      updated_at = NOW()
-    WHERE id = $1
-  `, [record.id]);
+async function persistRecords(client, records) {
+  const lookupCache = {
+    vendorIds: new Map(),
+    productIds: new Map()
+  };
+
+  for (let index = 0; index < records.length; index += UPSERT_BATCH_SIZE) {
+    const batch = records.slice(index, index + UPSERT_BATCH_SIZE);
+    await client.query("BEGIN");
+    try {
+      for (const record of batch) {
+        await upsertCveRecord(client, record, lookupCache);
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    }
+  }
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const now = new Date();
-  const requestedDays = Number(args.days || 30);
-  const days = Math.min(Math.max(requestedDays, 1), 30);
+  const days = parsePositiveInteger(args.days || 30, 30);
   const endIso = args['end-date'] || now.toISOString();
   const startIso = args['start-date'] || new Date(now.getTime() - (days * 24 * 60 * 60 * 1000)).toISOString();
   const windowType = String(args['window-type'] || process.env.DEFAULT_SYNC_WINDOW_TYPE || 'published').trim().toLowerCase() === 'modified' ? 'modified' : 'published';
-  const rawMaxRecords = Number(args['max-records'] ?? 300);
+  const rawMaxRecords = parseNonNegativeInteger(args['max-records'] ?? process.env.DEFAULT_SYNC_MAX_RECORDS ?? 0, 0);
   const maxRecords = rawMaxRecords === 0 ? Number.POSITIVE_INFINITY : rawMaxRecords;
-  const maxPages = rawMaxRecords === 0 ? Number.POSITIVE_INFINITY : Number(args['max-pages'] || 10);
-  const delayMs = Math.max(Number(args['delay-ms'] || 6500), 6000);
+  const maxPages = rawMaxRecords === 0 ? Number.POSITIVE_INFINITY : parsePositiveInteger(args['max-pages'] || 10, 10);
+  const delayMs = resolveDelayMs(args['delay-ms']);
 
   const runStart = await pool.query(`
     INSERT INTO ingest_runs (status, note)
@@ -405,16 +508,7 @@ async function main() {
     const records = await fetchWindow({ startIso, endIso, windowType, maxRecords, maxPages, delayMs });
     const client = await pool.connect();
     try {
-      for (const record of records) {
-        await client.query("BEGIN");
-        try {
-          await upsertCveRecord(client, record);
-          await client.query("COMMIT");
-        } catch (error) {
-          await client.query("ROLLBACK");
-          throw error;
-        }
-      }
+      await persistRecords(client, records);
     } finally {
       client.release();
     }
@@ -427,7 +521,7 @@ async function main() {
       WHERE id = $1
     `, [runId, records.length, `Synced ${records.length} CVEs using ${windowType} window.`]);
 
-    console.log(`Synced ${records.length} CVEs using ${windowType} window from ${startIso} to ${endIso}.`);
+    console.log(`Synced ${records.length} CVEs using ${windowType} window${rawMaxRecords === 0 ? " (full window)" : ""} from ${startIso} to ${endIso}.`);
   } catch (error) {
     await pool.query(`
       UPDATE ingest_runs

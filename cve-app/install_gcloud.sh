@@ -226,6 +226,8 @@ deploy_function_with_retry() {
       --trigger-http \
       --allow-unauthenticated \
       --service-account="$SA_EMAIL" \
+      --timeout=3600s \
+      --memory=1GiB \
       --set-env-vars "$env_vars"; then
       [[ -n "$output" ]] && echo "$output"
       return 0
@@ -490,7 +492,7 @@ if [[ "$ENABLE_LOOKER_STUDIO" == "yes" ]]; then
 fi
 
 log "Performing initial NVD sync"
-DB_HOST=127.0.0.1 DB_PORT="$PROXY_PORT" DB_USER="$DB_USER" DB_NAME="$DB_NAME" DB_PASSWORD="$DB_PASSWORD" NVD_API_KEY="$NVD_API_KEY" DEFAULT_SYNC_WINDOW_TYPE=published node scripts/syncNvdToDb.js --days="$INITIAL_SYNC_DAYS" --window-type=published --max-records=300
+DB_HOST=127.0.0.1 DB_PORT="$PROXY_PORT" DB_USER="$DB_USER" DB_NAME="$DB_NAME" DB_PASSWORD="$DB_PASSWORD" NVD_API_KEY="$NVD_API_KEY" DEFAULT_SYNC_WINDOW_TYPE=published DEFAULT_SYNC_MAX_RECORDS=0 node scripts/syncNvdToDb.js --days="$INITIAL_SYNC_DAYS" --window-type=published --max-records=0
 
 log "Ensuring service account exists"
 ensure_service_account_exists
@@ -503,7 +505,7 @@ log "Deploying Cloud Run service"
 deploy_cloud_run_service
 
 log "Deploying function $SYNC_FUNCTION"
-deploy_function_with_retry SYNC_FUNCTION "functions/syncRecentCves" "syncRecentCves" "INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,NVD_API_KEY=$NVD_API_KEY,DEFAULT_SYNC_WINDOW_TYPE=published" "Sync function name"
+deploy_function_with_retry SYNC_FUNCTION "functions/syncRecentCves" "syncRecentCves" "INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,NVD_API_KEY=$NVD_API_KEY,DEFAULT_SYNC_WINDOW_TYPE=published,DEFAULT_SYNC_MAX_RECORDS=0" "Sync function name"
 
 log "Deploying function $ANALYTICS_FUNCTION"
 deploy_function_with_retry ANALYTICS_FUNCTION "functions/refreshTrendAnalytics" "refreshTrendAnalytics" "INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD" "Analytics function name"
