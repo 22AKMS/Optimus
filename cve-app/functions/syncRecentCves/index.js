@@ -660,7 +660,7 @@ exports.syncRecentCves = async (req, res) => {
       UPDATE ingest_runs
       SET finished_at = NOW(), status = 'success', cve_count = $2, note = $3
       WHERE id = $1
-    `, [runId, records.length, `Synced ${records.length} CVEs${unlimitedWindow ? " from the full selected day window" : ""}.`]);
+    `, [runId, records.length, `Synced ${records.length} CVEs using ${windowType} window from ${startIso} to ${endIso}${unlimitedWindow ? " (full window)" : ""}.`]);
 
     res.json({ ok: true, synced: records.length, start_date: startIso, end_date: endIso, full_window: unlimitedWindow, days });
   } catch (error) {

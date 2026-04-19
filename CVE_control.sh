@@ -145,6 +145,46 @@ run_service_json() {
   gcloud run services describe "$APP_SERVICE" --region "$REGION" --format=json 2>/dev/null || true
 }
 
+service_env_value() {
+  local env_name="$1"
+  local service_json
+  service_json="$(run_service_json)"
+  [[ -n "$service_json" ]] || return 0
+  python3 -c 'import json,sys
+env_name = sys.argv[1]
+try:
+    data=json.load(sys.stdin)
+    envs=((data.get("spec") or {}).get("template") or {}).get("spec", {}).get("containers", [{}])[0].get("env", [])
+    for item in envs:
+        if item.get("name") == env_name:
+            print(item.get("value", ""))
+            break
+except Exception:
+    pass
+' "$env_name" <<<"$service_json"
+}
+
+service_cloudsql_connection_name() {
+  local service_json
+  service_json="$(run_service_json)"
+  [[ -n "$service_json" ]] || return 0
+  python3 -c 'import json,sys
+try:
+    data=json.load(sys.stdin)
+    annotations=((data.get("spec") or {}).get("template") or {}).get("metadata", {}).get("annotations", {})
+    print((annotations or {}).get("run.googleapis.com/cloudsql-instances", ""))
+except Exception:
+    pass
+' <<<"$service_json"
+}
+
+service_cloudsql_instance_name() {
+  local connection_name
+  connection_name="$(service_cloudsql_connection_name)"
+  [[ -n "$connection_name" ]] || return 0
+  printf '%s\n' "${connection_name##*:}"
+}
+
 current_dashboard_url() {
   local service_json
   service_json="$(run_service_json)"
@@ -193,6 +233,98 @@ clear_dashboard_url() {
   say "Removing shared Looker Studio URL from $APP_SERVICE..."
   gcloud run services update "$APP_SERVICE" --region "$REGION" --remove-env-vars SHARED_LOOKER_STUDIO_URL >/dev/null
   say "Shared Looker Studio URL removed from the app."
+}
+
+sql_public_ip() {
+  local instance_name="$1"
+  [[ -n "$instance_name" ]] || return 0
+  gcloud sql instances describe "$instance_name" --project "$PROJECT_ID" --format=json 2>/dev/null | python3 -c 'import json,sys
+try:
+    data=json.load(sys.stdin)
+    ips=data.get("ipAddresses") or []
+    primary=""
+    for item in ips:
+        if item.get("type") == "PRIMARY":
+            primary=item.get("ipAddress", "")
+            break
+    if not primary and ips:
+        primary=ips[0].get("ipAddress", "")
+    print(primary)
+except Exception:
+    pass
+'
+}
+
+sql_authorized_networks() {
+  local instance_name="$1"
+  [[ -n "$instance_name" ]] || return 0
+  gcloud sql instances describe "$instance_name" --project "$PROJECT_ID" --format=json 2>/dev/null | python3 -c 'import json,sys
+try:
+    data=json.load(sys.stdin)
+    values=[]
+    for item in (((data.get("settings") or {}).get("ipConfiguration") or {}).get("authorizedNetworks") or []):
+        value=(item or {}).get("value", "")
+        if value:
+            values.append(value)
+    print(", ".join(values))
+except Exception:
+    pass
+'
+}
+
+looker_db_user_candidates() {
+  local instance_name="$1"
+  local app_db_user="$2"
+  [[ -n "$instance_name" ]] || return 0
+  gcloud sql users list --instance="$instance_name" --project "$PROJECT_ID" --format=json 2>/dev/null | python3 -c 'import json,sys
+app_db_user = sys.argv[1]
+try:
+    users=json.load(sys.stdin)
+    names=[]
+    for item in users:
+        name=(item or {}).get("name", "")
+        if not name or name in {"postgres", app_db_user}:
+            continue
+        if name not in names:
+            names.append(name)
+    if "looker_reader" in names:
+        print("looker_reader")
+    else:
+        print(", ".join(names))
+except Exception:
+    pass
+' "$app_db_user"
+}
+
+show_lookerstudio_fields() {
+  require_cloud_project || return
+  local instance_name connection_name db_name app_db_user looker_user host authorized_networks
+  connection_name="$(service_cloudsql_connection_name)"
+  instance_name="$(service_cloudsql_instance_name)"
+  db_name="$(service_env_value DB_NAME)"
+  app_db_user="$(service_env_value DB_USER)"
+  if [[ -z "$instance_name" || -z "$db_name" ]]; then
+    say "Could not derive Cloud SQL connection details from $APP_SERVICE."
+    return 1
+  fi
+  host="$(sql_public_ip "$instance_name")"
+  authorized_networks="$(sql_authorized_networks "$instance_name")"
+  looker_user="$(looker_db_user_candidates "$instance_name" "$app_db_user")"
+
+  say "Looker Studio PostgreSQL connection"
+  say "Cloud SQL instance: $instance_name"
+  say "Connection name: ${connection_name:-Unavailable}"
+  say "Host/IP: ${host:-Unavailable}"
+  say "Port: 5432"
+  say "Database: $db_name"
+  if [[ -n "$looker_user" ]]; then
+    say "Username: $looker_user"
+  else
+    say "Username: not detected automatically"
+  fi
+  say "Reporting tables: looker_summary_metrics, looker_daily_severity, looker_vendor_year, looker_cve_explorer, looker_cve_overview"
+  say "Authorized connector networks: ${authorized_networks:-none found}"
+  say "Password: not stored here; use the Looker Studio read-only password chosen during install or reset it in Cloud SQL."
 }
 
 
@@ -336,14 +468,15 @@ Optimus control panel
 13) Show shared Looker Studio URL
 14) Set or change shared Looker Studio URL
 15) Remove shared Looker Studio URL
+16) Show Looker Studio PostgreSQL fields
 
 [NVD API Key]
-16) Show NVD API key status
-17) Set or change NVD API key
-18) Remove NVD API key
+17) Show NVD API key status
+18) Set or change NVD API key
+19) Remove NVD API key
 
 [Exit]
-19) Exit
+20) Exit
 MENU
 }
 
@@ -359,9 +492,11 @@ case "${1:-}" in
   lookerstudio-show) show_dashboard_url; exit 0 ;;
   lookerstudio-set) [[ -n "${2:-}" ]] || { say "Usage: ./CVE_control.sh lookerstudio-set <https://...>"; exit 1; }; set_dashboard_url "$2"; exit 0 ;;
   lookerstudio-clear) clear_dashboard_url; exit 0 ;;
+  lookerstudio-fields|lookerstudio-pg) show_lookerstudio_fields; exit 0 ;;
   dashboard-show) show_dashboard_url; exit 0 ;;
   dashboard-set) [[ -n "${2:-}" ]] || { say "Usage: ./CVE_control.sh dashboard-set <https://...>"; exit 1; }; set_dashboard_url "$2"; exit 0 ;;
   dashboard-clear) clear_dashboard_url; exit 0 ;;
+  dashboard-fields|dashboard-pg) show_lookerstudio_fields; exit 0 ;;
   nvd-key-show) show_nvd_api_key; exit 0 ;;
   nvd-key-set) [[ -n "${2:-}" ]] || { say "Usage: ./CVE_control.sh nvd-key-set <api-key>"; exit 1; }; set_nvd_api_key "$2"; exit 0 ;;
   nvd-key-clear) clear_nvd_api_key; exit 0 ;;
@@ -398,13 +533,14 @@ while true; do
       set_dashboard_url "$value"
       ;;
     15) clear_dashboard_url ;;
-    16) show_nvd_api_key ;;
-    17)
+    16) show_lookerstudio_fields ;;
+    17) show_nvd_api_key ;;
+    18)
       read -r -p 'Enter the NVD API key: ' value
       set_nvd_api_key "$value"
       ;;
-    18) clear_nvd_api_key ;;
-    19) exit 0 ;;
+    19) clear_nvd_api_key ;;
+    20) exit 0 ;;
     *) say "Invalid choice." ;;
   esac
 done

@@ -2,7 +2,7 @@ const state = {
   cves: [],
   severities: ["CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE", "UNKNOWN"],
   years: [],
-  recentWindowDays: 30,
+  syncWindowDays: 30,
   pagination: {
     page: 1,
     limit: 40,
@@ -169,19 +169,19 @@ function highSeverityCard(cve) {
 function renderOverview(payload) {
   const overview = payload.overview || {};
   const latestRun = payload.latest_run || null;
-  const recentWindowDays = Number(payload.recent_window_days || state.recentWindowDays || 30);
+  const syncWindowDays = Number(payload.sync_window_days || state.syncWindowDays || 30);
   const totalCves = Number(overview.total_cves || 0);
   const normalizedCves = Number(overview.normalized_cves || 0);
   const normalizedShare = totalCves ? Math.round((normalizedCves / totalCves) * 100) : 0;
   const grid = document.getElementById("overviewGrid");
 
-  state.recentWindowDays = recentWindowDays;
+  state.syncWindowDays = syncWindowDays;
 
   const cards = [
-    statCard("Total CVEs", formatCount(totalCves), `${formatCount(overview.recent_cves || 0)} published in the last ${pluralizeDayLabel(recentWindowDays)}`),
+    statCard("Total CVEs", formatCount(totalCves), `${formatCount(overview.recent_cves || 0)} published in the last ${pluralizeDayLabel(syncWindowDays)}`),
     statCard("Critical CVEs", formatCount(overview.critical_cves || 0), `${formatCount(overview.high_cves || 0)} high severity CVEs`),
     statCard("Known Exploited", formatCount(overview.kev_cves || 0), "CISA KEV-matched items"),
-    statCard("Latest Publish Date", overview.latest_published_at ? formatDate(overview.latest_published_at) : "No data", lastSyncDetail(latestRun)),
+    statCard("Oldest Publish Date", overview.oldest_published_at ? formatDate(overview.oldest_published_at) : "No data", lastSyncDetail(latestRun)),
     statCard("Normalized Software", formatCount(normalizedCves), `${normalizedShare}% of catalog mapped to products`)
   ];
 
@@ -330,11 +330,7 @@ async function loadHighSeverity() {
 }
 
 async function loadOverview() {
-  const { days } = currentQueryState();
-  const params = new URLSearchParams();
-  if (days) params.set("days", days);
-  const query = params.toString();
-  const data = await fetchJson(`/api/analytics/overview${query ? `?${query}` : ""}`);
+  const data = await fetchJson("/api/analytics/overview");
   renderOverview(data);
 }
 

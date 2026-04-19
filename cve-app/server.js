@@ -14,6 +14,23 @@ const appName = process.env.APP_NAME || "Optimus - A CVE Analysis Optimizer";
 const sourceNotice = process.env.SOURCE_NOTICE || "This product uses data from the NVD API but is not endorsed or certified by the NVD.";
 const sharedLookerStudioUrl = String(process.env.SHARED_LOOKER_STUDIO_URL || "").trim();
 const store = new UserStateStore();
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+function parseSyncWindowDays(run) {
+  const note = String(run?.note || "").trim();
+  if (!note) return null;
+
+  const match = note.match(/from\s+(\S+)\s+to\s+(\S+)/i);
+  if (!match) return null;
+
+  const start = Date.parse(match[1]);
+  const end = Date.parse(match[2]);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return null;
+  }
+
+  return Math.max(1, Math.round((end - start) / MS_PER_DAY));
+}
 
 function viewContext(extra = {}) {
   return {
@@ -55,9 +72,31 @@ app.get("/cves/:cveId", (req, res) => {
 
 app.get("/api/analytics/overview", async (req, res) => {
   try {
-    const requestedDays = Number(req.query.days || 30);
-    const recentWindowDays = Math.min(Math.max(Number.isFinite(requestedDays) ? requestedDays : 30, 1), 3650);
+    const [latestRunResult, latestSuccessfulRunResult] = await Promise.all([
+      query(`
+        SELECT started_at, finished_at, status, cve_count, note
+        FROM ingest_runs
+        ORDER BY started_at DESC
+        LIMIT 1
+      `),
+      query(`
+        SELECT started_at, finished_at, status, cve_count, note
+        FROM ingest_runs
+        WHERE status = 'success'
+        ORDER BY started_at DESC
+        LIMIT 1
+      `)
+    ]);
+
+    const latestRun = latestRunResult.rows[0] || null;
+    const latestSuccessfulRun = latestSuccessfulRunResult.rows[0] || null;
+    const fallbackWindowDays = Number(process.env.DEFAULT_SYNC_WINDOW_DAYS || 30);
+    const syncWindowDays = Math.min(
+      Math.max(parseSyncWindowDays(latestSuccessfulRun || latestRun) || fallbackWindowDays, 1),
+      3650
+    );
     const severityExpr = normalizedSeveritySql("severity", "cvss_base_score");
+
     const overviewResult = await query(`
       SELECT
         COUNT(*)::int AS total_cves,
@@ -66,22 +105,15 @@ app.get("/api/analytics/overview", async (req, res) => {
         COUNT(*) FILTER (WHERE published_at >= NOW() - ($1::int * INTERVAL '1 day'))::int AS recent_cves,
         COUNT(*) FILTER (WHERE has_kev)::int AS kev_cves,
         COUNT(*) FILTER (WHERE product_count > 0)::int AS normalized_cves,
-        MAX(published_at) AS latest_published_at,
+        MIN(published_at) AS oldest_published_at,
         MAX(last_modified_at) AS latest_modified_at
       FROM cves
-    `, [recentWindowDays]);
-
-    const latestRun = await query(`
-      SELECT started_at, finished_at, status, cve_count, note
-      FROM ingest_runs
-      ORDER BY started_at DESC
-      LIMIT 1
-    `);
+    `, [syncWindowDays]);
 
     res.json({
       overview: overviewResult.rows[0],
-      latest_run: latestRun.rows[0] || null,
-      recent_window_days: recentWindowDays
+      latest_run: latestRun,
+      sync_window_days: syncWindowDays
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
