@@ -38,6 +38,162 @@ function viewContext(extra = {}) {
   };
 }
 
+function toTimestamp(value) {
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function findProductById(productId) {
+  const productResult = await query(`
+    SELECT p.id AS product_id, p.name AS product_name, v.name AS vendor_name
+    FROM products p
+    JOIN vendors v ON v.id = p.vendor_id
+    WHERE p.id = $1
+  `, [productId]);
+
+  return productResult.rows[0] || null;
+}
+
+async function addWatchedProductForUser(userId, productId) {
+  const product = await findProductById(productId);
+  if (!product) return null;
+
+  await store.addWatchedProduct(userId, {
+    product_id: Number(productId),
+    product_name: product.product_name || "",
+    vendor_name: product.vendor_name || ""
+  });
+
+  return product;
+}
+
+async function buildWatchedProductFeed(watchedProducts, limit = 50) {
+  const productIds = [...new Set((watchedProducts || []).map((item) => Number(item.product_id)).filter((value) => value > 0))];
+  if (!productIds.length) {
+    return {
+      watchedFeed: [],
+      watchedFeedCount: 0,
+      watchedFeedNewCount: 0,
+      watchedProducts
+    };
+  }
+
+  const placeholders = productIds.map((_, index) => `$${index + 1}`).join(", ");
+  const result = await query(`
+    SELECT
+      c.*,
+      ${normalizedSeveritySql("c.severity", "c.cvss_base_score")} AS display_severity,
+      GREATEST(c.last_modified_at, c.published_at) AS activity_at,
+      primary_match.vendor_name AS primary_vendor,
+      primary_match.product_name AS primary_product,
+      primary_match.product_id AS primary_product_id,
+      p.id AS matched_product_id,
+      p.name AS matched_product_name,
+      v.name AS matched_vendor_name
+    FROM cves c
+    JOIN cve_products cp ON cp.cve_id = c.id
+    JOIN products p ON p.id = cp.product_id
+    JOIN vendors v ON v.id = p.vendor_id
+    LEFT JOIN LATERAL (
+      SELECT
+        primary_vendor.name AS vendor_name,
+        primary_product.name AS product_name,
+        primary_product.id AS product_id
+      FROM cve_products cp_primary
+      JOIN products primary_product ON primary_product.id = cp_primary.product_id
+      JOIN vendors primary_vendor ON primary_vendor.id = primary_product.vendor_id
+      WHERE cp_primary.cve_id = c.id
+      ORDER BY primary_vendor.name ASC, primary_product.name ASC
+      LIMIT 1
+    ) primary_match ON TRUE
+    WHERE cp.product_id IN (${placeholders})
+      AND cp.is_vulnerable IS TRUE
+    ORDER BY activity_at DESC, ${severityOrderSql("c.severity", "c.cvss_base_score")} DESC, c.cvss_base_score DESC NULLS LAST, c.id DESC
+  `, productIds);
+
+  const watchedById = new Map(watchedProducts.map((item) => [Number(item.product_id), item]));
+  const productStats = new Map(productIds.map((productId) => [productId, {
+    matching_cve_count: 0,
+    new_cve_count: 0,
+    latest_activity_at: null
+  }]));
+  const feedById = new Map();
+
+  result.rows.forEach((row) => {
+    const matchedProductId = Number(row.matched_product_id);
+    const watchedProduct = watchedById.get(matchedProductId);
+    if (!watchedProduct) return;
+
+    const activityAt = row.activity_at || row.last_modified_at || row.published_at || null;
+    const activityTs = toTimestamp(activityAt);
+    const lastViewedTs = toTimestamp(watchedProduct.last_viewed_at || watchedProduct.created_at);
+    const isNewForProduct = Boolean(activityTs && lastViewedTs && activityTs > lastViewedTs);
+
+    const stats = productStats.get(matchedProductId);
+    if (stats) {
+      stats.matching_cve_count += 1;
+      if (isNewForProduct) {
+        stats.new_cve_count += 1;
+      }
+      if (!stats.latest_activity_at || activityTs > toTimestamp(stats.latest_activity_at)) {
+        stats.latest_activity_at = activityAt;
+      }
+    }
+
+    let feedItem = feedById.get(row.id);
+    if (!feedItem) {
+      feedItem = {
+        ...serializeCve(row),
+        activity_at: activityAt,
+        is_new: false,
+        matched_products: []
+      };
+      feedById.set(row.id, feedItem);
+    }
+
+    feedItem.is_new = feedItem.is_new || isNewForProduct;
+    if (!feedItem.activity_at || activityTs > toTimestamp(feedItem.activity_at)) {
+      feedItem.activity_at = activityAt;
+    }
+    feedItem.matched_products.push({
+      product_id: matchedProductId,
+      product_name: row.matched_product_name,
+      vendor_name: row.matched_vendor_name,
+      is_new: isNewForProduct
+    });
+  });
+
+  const watchedFeed = Array.from(feedById.values())
+    .slice(0, limit)
+    .map((item) => ({
+      ...item,
+      matched_products: item.matched_products.sort((left, right) => {
+        const vendorCompare = String(left.vendor_name || "").localeCompare(String(right.vendor_name || ""));
+        if (vendorCompare !== 0) return vendorCompare;
+        const productCompare = String(left.product_name || "").localeCompare(String(right.product_name || ""));
+        if (productCompare !== 0) return productCompare;
+        return Number(left.product_id || 0) - Number(right.product_id || 0);
+      })
+    }));
+
+  const watchedFeedNewCount = Array.from(feedById.values()).filter((item) => item.is_new).length;
+  const enrichedWatchedProducts = watchedProducts.map((item) => ({
+    ...item,
+    ...(productStats.get(Number(item.product_id)) || {
+      matching_cve_count: 0,
+      new_cve_count: 0,
+      latest_activity_at: null
+    })
+  }));
+
+  return {
+    watchedFeed,
+    watchedFeedCount: feedById.size,
+    watchedFeedNewCount,
+    watchedProducts: enrichedWatchedProducts
+  };
+}
+
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
 app.use(express.json());
@@ -303,11 +459,21 @@ app.get("/api/high-severity", async (req, res) => {
 
 app.get("/api/watchlist", async (req, res) => {
   try {
-    const savedIds = await store.getSavedCves(defaultUserId);
-    const watchedProducts = await store.getWatchedProducts(defaultUserId);
+    const [savedIds, baseWatchedProducts] = await Promise.all([
+      store.getSavedCves(defaultUserId),
+      store.getWatchedProducts(defaultUserId)
+    ]);
+    const watchedState = await buildWatchedProductFeed(baseWatchedProducts);
 
     if (!savedIds.length) {
-      return res.json({ items: [], watched_products: watchedProducts, count: 0 });
+      return res.json({
+        items: [],
+        watched_products: watchedState.watchedProducts,
+        watched_feed: watchedState.watchedFeed,
+        watched_feed_count: watchedState.watchedFeedCount,
+        watched_feed_new_count: watchedState.watchedFeedNewCount,
+        count: 0
+      });
     }
 
     const placeholders = savedIds.map((_, index) => `$${index + 1}`).join(", ");
@@ -337,8 +503,27 @@ app.get("/api/watchlist", async (req, res) => {
 
     res.json({
       items: result.rows.map(serializeCve),
-      watched_products: watchedProducts,
+      watched_products: watchedState.watchedProducts,
+      watched_feed: watchedState.watchedFeed,
+      watched_feed_count: watchedState.watchedFeedCount,
+      watched_feed_new_count: watchedState.watchedFeedNewCount,
       count: result.rows.length
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/watchlist/mark-viewed", async (req, res) => {
+  try {
+    const watchedProducts = await store.getWatchedProducts(defaultUserId);
+    const productIds = watchedProducts.map((item) => Number(item.product_id)).filter((value) => value > 0);
+
+    await store.markWatchedProductsViewed(defaultUserId, productIds);
+
+    res.json({
+      ok: true,
+      product_count: productIds.length
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -431,7 +616,8 @@ app.get("/api/cves/:cveId", async (req, res) => {
         version_start_excluding: product.version_start_excluding,
         version_end_including: product.version_end_including,
         version_end_excluding: product.version_end_excluding,
-        is_vulnerable: Boolean(product.is_vulnerable)
+        is_vulnerable: Boolean(product.is_vulnerable),
+        watched: watchedIds.has(Number(product.product_id))
       })),
       references: referencesResult.rows,
       related_cves: relatedResult.rows.map(serializeCve),
@@ -468,6 +654,38 @@ app.delete("/api/cves/:cveId/saved", async (req, res) => {
   }
 });
 
+app.post("/api/watched-products", async (req, res) => {
+  try {
+    const productId = Number(req.body?.product_id || 0);
+    if (!productId) {
+      return res.status(400).json({ error: "product_id is required" });
+    }
+
+    const product = await addWatchedProductForUser(defaultUserId, productId);
+    if (!product) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    res.json({ ok: true, product_id: productId });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/watched-products/:productId", async (req, res) => {
+  try {
+    const productId = Number(req.params.productId || 0);
+    if (!productId) {
+      return res.status(400).json({ error: "product_id is required" });
+    }
+
+    await store.removeWatchedProduct(defaultUserId, productId);
+    res.json({ ok: true, product_id: productId });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post("/api/cves/:cveId/watch-product", async (req, res) => {
   try {
     const cveId = String(req.params.cveId || "").trim().toUpperCase();
@@ -482,23 +700,10 @@ app.post("/api/cves/:cveId/watch-product", async (req, res) => {
       return res.status(400).json({ error: "product_id is required" });
     }
 
-    const productResult = await query(`
-      SELECT p.id AS product_id, p.name AS product_name, v.name AS vendor_name
-      FROM products p
-      JOIN vendors v ON v.id = p.vendor_id
-      WHERE p.id = $1
-    `, [productId]);
-
-    const product = productResult.rows[0];
+    const product = await addWatchedProductForUser(defaultUserId, productId);
     if (!product) {
       return res.status(404).json({ error: "Product not found" });
     }
-
-    await store.addWatchedProduct(defaultUserId, {
-      product_id: productId,
-      product_name: product.product_name || "",
-      vendor_name: product.vendor_name || ""
-    });
 
     res.json({ ok: true, product_id: productId });
   } catch (error) {

@@ -72,7 +72,7 @@ function exploitSummary(cve) {
   if (!parts.length && isKnownValue(cve.vuln_status)) {
     parts.push(humanizeMetric(cve.vuln_status));
   }
-  return parts.slice(0, 3).join(" · ") || "Structured product data pending";
+  return parts.slice(0, 3).join(" / ") || "Structured product data pending";
 }
 
 function targetLabel(cve) {
@@ -80,7 +80,7 @@ function targetLabel(cve) {
     .map((value) => String(value || "").trim())
     .filter(isKnownValue);
 
-  if (parts.length === 2) return `${parts[0]} · ${parts[1]}`;
+  if (parts.length === 2) return `${parts[0]} / ${parts[1]}`;
   if (parts.length === 1) return parts[0];
   return exploitSummary(cve);
 }
@@ -99,6 +99,7 @@ function showToast(message, variant = "success") {
 function renderHero(data) {
   const hero = document.getElementById("cveHero");
   const watchDisabled = !data.primary_product_id;
+  const watchLabel = data.primary_product_watched ? "Unwatch Primary Product" : "Watch Primary Product";
   const eyebrow = isKnownValue(data.primary_vendor) ? String(data.primary_vendor).trim() : "Exploit context";
   const contextLine = targetLabel(data);
   const statusText = isKnownValue(data.vuln_status) ? humanizeMetric(data.vuln_status) : "Status pending";
@@ -109,7 +110,7 @@ function renderHero(data) {
         <div>
           <p class="eyebrow">${escapeHtml(eyebrow)}</p>
           <h1>${escapeHtml(data.id)}</h1>
-          <p class="muted compact">${escapeHtml(contextLine)} · ${escapeHtml(statusText)}</p>
+          <p class="muted compact">${escapeHtml(contextLine)} / ${escapeHtml(statusText)}</p>
         </div>
         <span class="badge ${severityClass(data.severity)}">${escapeHtml(data.severity || "UNKNOWN")}</span>
       </div>
@@ -140,7 +141,7 @@ function renderHero(data) {
       </div>
       <div class="action-row left-align">
         <button id="saveButton" class="${data.saved ? "secondary" : ""}">${data.saved ? "Remove Saved CVE" : "Save CVE"}</button>
-        <button id="watchButton" class="${data.primary_product_watched ? "secondary" : ""}" ${watchDisabled ? "disabled" : ""}>${data.primary_product_watched ? "Unwatch Product" : "Watch Product"}</button>
+        <button id="watchButton" class="${data.primary_product_watched ? "secondary" : ""}" ${watchDisabled ? "disabled" : ""}>${watchLabel}</button>
       </div>
     </div>
   `;
@@ -159,17 +160,38 @@ function renderProducts(products) {
   }
 
   target.innerHTML = products.map((product) => `
-    <article class="mini-card">
-      <strong>${escapeHtml(product.vendor_name)} · ${escapeHtml(product.product_name)}</strong>
-      <p class="muted compact">${escapeHtml(product.cpe_uri || product.canonical_cpe_uri || "No CPE URI")}</p>
+    <article class="mini-card product-card">
+      <div class="product-card-head">
+        <div class="product-card-copy stack tight">
+          <strong>${escapeHtml(product.vendor_name)} / ${escapeHtml(product.product_name)}</strong>
+          <p class="muted compact">${escapeHtml(product.cpe_uri || product.canonical_cpe_uri || "No CPE URI")}</p>
+        </div>
+        <button
+          type="button"
+          class="product-watch-button ${product.watched ? "secondary" : ""}"
+          data-watch-product-id="${escapeHtml(product.product_id)}"
+          data-watch-product-watched="${product.watched ? "1" : "0"}"
+        >
+          ${product.watched ? "Unwatch" : "Watch"}
+        </button>
+      </div>
       <div class="badge-row left-align">
-        ${product.version_start_including ? `<span class="badge">Start ≥ ${escapeHtml(product.version_start_including)}</span>` : ""}
+        <span class="badge ${product.is_vulnerable ? "severity-critical" : ""}">${product.is_vulnerable ? "Affected" : "Not flagged vulnerable"}</span>
+        ${product.version_start_including ? `<span class="badge">Start >= ${escapeHtml(product.version_start_including)}</span>` : ""}
         ${product.version_start_excluding ? `<span class="badge">Start > ${escapeHtml(product.version_start_excluding)}</span>` : ""}
-        ${product.version_end_including ? `<span class="badge">End ≤ ${escapeHtml(product.version_end_including)}</span>` : ""}
+        ${product.version_end_including ? `<span class="badge">End <= ${escapeHtml(product.version_end_including)}</span>` : ""}
         ${product.version_end_excluding ? `<span class="badge">End < ${escapeHtml(product.version_end_excluding)}</span>` : ""}
       </div>
     </article>
   `).join("");
+
+  target.querySelectorAll("[data-watch-product-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const productId = Number(button.dataset.watchProductId || 0);
+      const isWatched = button.dataset.watchProductWatched === "1";
+      toggleWatchedProduct(productId, isWatched).catch(showError);
+    });
+  });
 }
 
 function renderReferences(references) {
@@ -222,24 +244,28 @@ async function toggleSaved(isSaved) {
   await loadCve();
 }
 
-async function toggleWatch(isWatched) {
-  if (!currentCve?.primary_product_id) {
+async function toggleWatchedProduct(productId, isWatched) {
+  if (!productId) {
     return;
   }
 
   if (isWatched) {
-    await fetchJson(`/api/cves/${encodeURIComponent(cveId)}/watch-product/${currentCve.primary_product_id}`, { method: "DELETE" });
+    await fetchJson(`/api/watched-products/${encodeURIComponent(productId)}`, { method: "DELETE" });
     showToast("Removed watched product.");
   } else {
-    await fetchJson(`/api/cves/${encodeURIComponent(cveId)}/watch-product`, {
+    await fetchJson("/api/watched-products", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ product_id: currentCve.primary_product_id })
+      body: JSON.stringify({ product_id: productId })
     });
     showToast("Product added to watchlist.");
   }
 
   await loadCve();
+}
+
+async function toggleWatch(isWatched) {
+  await toggleWatchedProduct(currentCve?.primary_product_id, isWatched);
 }
 
 async function loadCve() {
