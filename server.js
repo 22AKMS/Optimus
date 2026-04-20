@@ -194,6 +194,55 @@ async function buildWatchedProductFeed(watchedProducts, limit = 50) {
   };
 }
 
+async function buildSavedCvesState(userId) {
+  const savedIds = await store.getSavedCves(userId);
+  if (!savedIds.length) {
+    return { items: [], count: 0 };
+  }
+
+  const placeholders = savedIds.map((_, index) => `$${index + 1}`).join(", ");
+  const result = await query(`
+    SELECT
+      c.*,
+      ${normalizedSeveritySql("c.severity", "c.cvss_base_score")} AS display_severity,
+      primary_match.vendor_name AS primary_vendor,
+      primary_match.product_name AS primary_product,
+      primary_match.product_id AS primary_product_id
+    FROM cves c
+    LEFT JOIN LATERAL (
+      SELECT
+        v.name AS vendor_name,
+        p.name AS product_name,
+        p.id AS product_id
+      FROM cve_products cp
+      JOIN products p ON p.id = cp.product_id
+      JOIN vendors v ON v.id = p.vendor_id
+      WHERE cp.cve_id = c.id
+      ORDER BY v.name ASC, p.name ASC
+      LIMIT 1
+    ) primary_match ON TRUE
+    WHERE c.id IN (${placeholders})
+    ORDER BY c.published_at DESC, c.cvss_base_score DESC NULLS LAST, c.id DESC
+  `, savedIds);
+
+  return {
+    items: result.rows.map(serializeCve),
+    count: result.rows.length
+  };
+}
+
+async function buildWatchedProductsState(userId) {
+  const watchedProducts = await store.getWatchedProducts(userId);
+  const watchedState = await buildWatchedProductFeed(watchedProducts);
+
+  return {
+    watched_products: watchedState.watchedProducts,
+    watched_feed: watchedState.watchedFeed,
+    watched_feed_count: watchedState.watchedFeedCount,
+    watched_feed_new_count: watchedState.watchedFeedNewCount
+  };
+}
+
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
 app.use(express.json());
@@ -214,6 +263,10 @@ app.get("/", (req, res) => {
 
 app.get("/watchlist", (req, res) => {
   res.render("watchlist", viewContext());
+});
+
+app.get("/watched-products", (req, res) => {
+  res.render("watched-products", viewContext());
 });
 
 app.get("/cves/:cveId", (req, res) => {
@@ -459,62 +512,21 @@ app.get("/api/high-severity", async (req, res) => {
 
 app.get("/api/watchlist", async (req, res) => {
   try {
-    const [savedIds, baseWatchedProducts] = await Promise.all([
-      store.getSavedCves(defaultUserId),
-      store.getWatchedProducts(defaultUserId)
-    ]);
-    const watchedState = await buildWatchedProductFeed(baseWatchedProducts);
-
-    if (!savedIds.length) {
-      return res.json({
-        items: [],
-        watched_products: watchedState.watchedProducts,
-        watched_feed: watchedState.watchedFeed,
-        watched_feed_count: watchedState.watchedFeedCount,
-        watched_feed_new_count: watchedState.watchedFeedNewCount,
-        count: 0
-      });
-    }
-
-    const placeholders = savedIds.map((_, index) => `$${index + 1}`).join(", ");
-    const result = await query(`
-      SELECT
-        c.*,
-        ${normalizedSeveritySql("c.severity", "c.cvss_base_score")} AS display_severity,
-        primary_match.vendor_name AS primary_vendor,
-        primary_match.product_name AS primary_product,
-        primary_match.product_id AS primary_product_id
-      FROM cves c
-      LEFT JOIN LATERAL (
-        SELECT
-          v.name AS vendor_name,
-          p.name AS product_name,
-          p.id AS product_id
-        FROM cve_products cp
-        JOIN products p ON p.id = cp.product_id
-        JOIN vendors v ON v.id = p.vendor_id
-        WHERE cp.cve_id = c.id
-        ORDER BY v.name ASC, p.name ASC
-        LIMIT 1
-      ) primary_match ON TRUE
-      WHERE c.id IN (${placeholders})
-      ORDER BY c.published_at DESC, c.cvss_base_score DESC NULLS LAST, c.id DESC
-    `, savedIds);
-
-    res.json({
-      items: result.rows.map(serializeCve),
-      watched_products: watchedState.watchedProducts,
-      watched_feed: watchedState.watchedFeed,
-      watched_feed_count: watchedState.watchedFeedCount,
-      watched_feed_new_count: watchedState.watchedFeedNewCount,
-      count: result.rows.length
-    });
+    res.json(await buildSavedCvesState(defaultUserId));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post("/api/watchlist/mark-viewed", async (req, res) => {
+app.get("/api/watched-products/feed", async (req, res) => {
+  try {
+    res.json(await buildWatchedProductsState(defaultUserId));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post(["/api/watchlist/mark-viewed", "/api/watched-products/mark-viewed"], async (req, res) => {
   try {
     const watchedProducts = await store.getWatchedProducts(defaultUserId);
     const productIds = watchedProducts.map((item) => Number(item.product_id)).filter((value) => value > 0);

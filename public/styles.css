@@ -183,8 +183,17 @@ button:disabled {
   gap: 1rem;
 }
 
+.watch-dashboard {
+  grid-template-columns: minmax(0, 1.65fr) 360px;
+}
+
 .sidebar {
   align-self: start;
+}
+
+.watch-sidebar-panel {
+  position: sticky;
+  top: 1rem;
 }
 
 .stats-grid {
@@ -395,6 +404,14 @@ button:disabled {
 
   .sidebar {
     order: -1;
+  }
+
+  .watch-dashboard .sidebar {
+    order: 0;
+  }
+
+  .watch-sidebar-panel {
+    position: static;
   }
 }
 

@@ -2,59 +2,54 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title><%= appName %></title>
+  <title><%= appName %> - Watched Products</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/png" href="/static/favicon.png">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body data-cve-id="<%= cveId %>" data-user-id="<%= appUserId %>">
+<body data-user-id="<%= appUserId %>">
   <header class="page-header slim">
     <div class="detail-topbar">
-      <a class="back-link" href="/">← Back to CVE list</a>
+      <a class="back-link" href="/">Back to CVE list</a>
       <div class="header-actions">
         <% if (sharedLookerStudioUrl) { %>
           <a class="nav-button secondary" href="<%= sharedLookerStudioUrl %>" target="_blank" rel="noopener noreferrer">Looker Studio</a>
         <% } %>
         <a class="nav-button secondary" href="/watchlist">Saved CVEs</a>
-        <a class="nav-button secondary" href="/watched-products">Watched Products</a>
         <div class="brand-inline">
           <img src="/static/favicon.png" alt="Optimus logo" class="brand-mark small">
           <span class="eyebrow compact-eyebrow"><%= appName %></span>
         </div>
       </div>
     </div>
-    <p class="header-copy"><%= sourceNotice %></p>
+    <h1 class="watchlist-title">Watched Products</h1>
+    <p class="header-copy">Tracked products and the latest matching vulnerable CVEs for the current demo user.</p>
   </header>
 
-  <main class="layout detail-layout">
-    <section id="cveHero" class="detail-hero panel"></section>
-
-    <section class="detail-grid-3 detail-grid-balance">
-      <div class="panel">
+  <main class="layout">
+    <section class="split watch-dashboard">
+      <div class="stack">
         <div class="section-title-row">
-          <h2>Affected Software</h2>
+          <h2>Tracked CVE Activity</h2>
+          <span id="watchedFeedCount" class="pill"></span>
         </div>
-        <div id="productsList" class="stack"></div>
+        <div id="watchedFeed" class="card-grid"></div>
       </div>
 
-      <div class="panel">
-        <div class="section-title-row">
-          <h2>References</h2>
-        </div>
-        <div id="referencesList" class="stack"></div>
-      </div>
-
-      <aside class="stack">
-        <div class="panel">
-          <h2>Related CVEs</h2>
-          <div id="relatedCves" class="stack"></div>
-        </div>
+      <aside class="sidebar stack">
+        <section class="panel watched-products-panel watch-sidebar-panel">
+          <div class="section-title-row">
+            <h2>Watched Products</h2>
+            <span id="watchedProductsCount" class="pill"></span>
+          </div>
+          <div id="watchedProductsList" class="stack"></div>
+        </section>
       </aside>
     </section>
   </main>
 
   <div id="actionToast" class="toast" aria-live="polite" role="status"></div>
-  <script src="/static/cve.js" defer></script>
+  <script src="/static/watched-products.js" defer></script>
 </body>
 </html>
