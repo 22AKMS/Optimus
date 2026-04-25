@@ -2,7 +2,7 @@
 ### For the sake of the Demo, The amount of data we retrieve from NVD's API is limited to the last 15 days and we trigger the refresh manually as not to get rate limited or outright blocked.
 
 <p align="center">
-  <img src="https://github.itap.purdue.edu/aalsaadi/Optimus/blob/main/public/apple-touch-icon.png" width="120" />
+  <img src="https://github.com/22AKMS/Optimus/blob/main/public/apple-touch-icon.png" width="120" />
 </p>
 
 <h1 align="center">Optimus</h1>
