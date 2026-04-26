@@ -47,7 +47,28 @@ npm install
 ./install_gcloud.sh
 ```
 
-WIP<!-- ⚠️⚠️ add more here...-->
+### Automatic installer parameters
+| Parameter | Default | Required | Description |
+|---|---:|:---:|---|
+| Google Cloud project ID | None | Yes | GCP project where Optimus will be deployed. |
+| Region | `us-central1` | Yes | Region for Cloud Run, Cloud Functions, Firestore, and Cloud SQL. |
+| Cloud SQL instance name | `cve-analyzer-sql` | Yes | PostgreSQL Cloud SQL instance name. |
+| PostgreSQL database name | `cve_analyzer` | Yes | Database used by the web app, functions, and Looker Studio view. |
+| PostgreSQL app user | `appuser` | Yes | Database user used by the app and functions. |
+| PostgreSQL app user password | None | Yes | Password assigned to the app database user. |
+| PostgreSQL postgres admin password | None | Yes | Password assigned to the Cloud SQL `postgres` admin user. |
+| Firestore database ID | `cve-analyzer` | Yes | Firestore database used for saved CVEs, watched products, and user state. |
+| Cloud Run service name | `cve-analyzer-app` | Yes | Name of the deployed web application service. |
+| Service account name | `cve-analyzer-sa` | Yes | Service account used by Cloud Run and Cloud Functions. |
+| Sync function name | `syncRecentCves` | Yes | Cloud Function that pulls CVE data from the NVD API. |
+| Analytics function name | `refreshTrendAnalytics` | Yes | Cloud Function that refreshes analytics and rebuilds the Looker view. |
+| Demo app user ID | `demo-user` | Yes | User key used for demo saved CVEs and watched products. |
+| Initial sync window in days | `30` | Yes | Number of recent published days to fetch during the initial NVD sync. |
+| Optional NVD API key | Blank | No | NVD API key used to reduce rate limiting. |
+| Configure Cloud SQL access for Looker Studio | `Y` | Yes | Creates and configures a read-only PostgreSQL user for Looker Studio. |
+| Looker Studio read-only PostgreSQL user | `looker_reader` | If Looker enabled | Database user used by the Looker Studio PostgreSQL connector. |
+| Looker Studio read-only PostgreSQL password | None | If Looker enabled | Password assigned to the Looker Studio database user. |
+| Authorize Looker Studio connector IP range | `Y` | If Looker enabled | Adds `142.251.74.0/23` to the Cloud SQL authorized networks for Looker Studio. |
 
 ## Manual Installation
 WIP<!-- ⚠️⚠️ add more here...-->
