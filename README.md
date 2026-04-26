@@ -49,6 +49,80 @@ npm install
 
 WIP<!-- ⚠️⚠️ add more here...-->
 
+
+
+## Team member responsibilities
+
+- [ ] **Abdulla Alsaadi - Backend / API implementation / Installer / Backend scripts**
+- [ ] **Liulseged Abate - Web app / frontend**
+- [ ] **Matteo Hodge - Databases / cloud services**
+- [ ] **Noah Pumphrey - Functions / deployment / demo**
+
+
+## Project Requirements
+| Requirement | Status | Note |
+|---|---|---|
+| One relational database | ✅ | Cloud SQL - PostgreSQL |
+| One Non-relational database | ✅ | Firestore |
+| Google Cloud Function 1 | ✅ | syncRecentCves |
+| Google Cloud Function 2 | ✅ | refreshTrentAnalystics |
+
+## Diagram
+
+                           +---------------------------+
+                           |         Browser           |
+                           |  homepage / CVE detail    |
+                           |  filters / watchlist      |
+                           +-------------+-------------+
+                                         |
+                                         | HTTPS
+                                         v
+                           +---------------------------+
+                           |    Cloud Run web app      |
+                           |   Node.js / Express       |
+                           |   Optimus CVE Analyzer    |
+                           +------+--------------+-----+
+                                  |              |
+                 relational data  |              |  non-relational data
+                                  v              v
+                    +--------------------+   +--------------------+
+                    | Cloud SQL          |   | Firestore          |
+                    | PostgreSQL         |   | saved CVEs /       |
+                    | CVEs / products /  |   | watchlist /        |
+                    | references / stats |   | user state         |
+                    +----------+---------+   +--------------------+
+                               ^
+                               |
+                               | ingest / refresh
+                               |
+                +--------------+------------------------------+
+                | Google Cloud Functions                      |
+                | 1) syncRecentCves                           |
+                |    pulls CVEs from NVD API into Cloud SQL   |
+                | 2) refreshTrendAnalytics                    |
+                |    updates trend/summary analytics          |
+                +--------------+------------------------------+
+                               ^
+                               |
+                               | CVE feed
+                               |
+                    +----------------------------+
+                    | NVD CVE API                |
+                    | public vulnerability data  |
+                    +----------------------------+
+
+                    +----------------------------+
+                    | Looker Studio              |
+                    | trend dashboards / charts  |
+                    +-------------^--------------+
+                                  |
+                                  | reads analytics data
+                                  |
+                           +------+------+
+                           |  Cloud SQL  |
+                           +-------------+
+
+
 ## Manual Installation
 Use these steps if you want to deploy the GCP resources yourself instead of running `install_gcloud.sh`.
 
@@ -290,74 +364,3 @@ Use only this reporting source:
 ```text
 looker_cve_overview
 ```
-
-## Team member responsibilities
-
-- [ ] **Abdulla Alsaadi - Backend / API implementation / Installer / Backend scripts**
-- [ ] **Liulseged Abate - Web app / frontend**
-- [ ] **Matteo Hodge - Databases / cloud services**
-- [ ] **Noah Pumphrey - Functions / deployment / demo**
-
-
-## Project Requirements
-| Requirement | Status | Note |
-|---|---|---|
-| One relational database | ✅ | Cloud SQL - PostgreSQL |
-| One Non-relational database | ✅ | Firestore |
-| Google Cloud Function 1 | ✅ | syncRecentCves |
-| Google Cloud Function 2 | ✅ | refreshTrentAnalystics |
-
-## Diagram
-
-                           +---------------------------+
-                           |         Browser           |
-                           |  homepage / CVE detail    |
-                           |  filters / watchlist      |
-                           +-------------+-------------+
-                                         |
-                                         | HTTPS
-                                         v
-                           +---------------------------+
-                           |    Cloud Run web app      |
-                           |   Node.js / Express       |
-                           |   Optimus CVE Analyzer    |
-                           +------+--------------+-----+
-                                  |              |
-                 relational data  |              |  non-relational data
-                                  v              v
-                    +--------------------+   +--------------------+
-                    | Cloud SQL          |   | Firestore          |
-                    | PostgreSQL         |   | saved CVEs /       |
-                    | CVEs / products /  |   | watchlist /        |
-                    | references / stats |   | user state         |
-                    +----------+---------+   +--------------------+
-                               ^
-                               |
-                               | ingest / refresh
-                               |
-                +--------------+------------------------------+
-                | Google Cloud Functions                      |
-                | 1) syncRecentCves                           |
-                |    pulls CVEs from NVD API into Cloud SQL   |
-                | 2) refreshTrendAnalytics                    |
-                |    updates trend/summary analytics          |
-                +--------------+------------------------------+
-                               ^
-                               |
-                               | CVE feed
-                               |
-                    +----------------------------+
-                    | NVD CVE API                |
-                    | public vulnerability data  |
-                    +----------------------------+
-
-                    +----------------------------+
-                    | Looker Studio              |
-                    | trend dashboards / charts  |
-                    +-------------^--------------+
-                                  |
-                                  | reads analytics data
-                                  |
-                           +------+------+
-                           |  Cloud SQL  |
-                           +-------------+
