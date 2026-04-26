@@ -110,15 +110,31 @@ exports.refreshTrendAnalytics = async (req, res) => {
       FROM cves
     `);
 
+    await client.query(`
+      ALTER TABLE looker_cve_overview
+        ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS last_modified_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS has_mapped_products BOOLEAN,
+        ADD COLUMN IF NOT EXISTS total_cves INTEGER NOT NULL DEFAULT 1,
+        ADD COLUMN IF NOT EXISTS total_critical_cves INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS total_high_cves INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS total_known_exploits INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS total_mapped_products INTEGER NOT NULL DEFAULT 0
+    `);
+
     await client.query("TRUNCATE looker_cve_overview");
     await client.query(`
       INSERT INTO looker_cve_overview (
-        cve_id, published_date, last_modified_date, year, severity, cvss_base_score, trending_score, has_kev,
-        cwe_id, cwe_name, primary_vendor, primary_product, reference_count, product_count, description
+        cve_id, published_at, published_date, last_modified_at, last_modified_date, year, severity,
+        cvss_base_score, trending_score, has_kev, cwe_id, cwe_name, primary_vendor, primary_product,
+        has_mapped_products, reference_count, product_count, total_cves, total_critical_cves,
+        total_high_cves, total_known_exploits, total_mapped_products, description
       )
       SELECT
         c.id AS cve_id,
+        c.published_at,
         c.published_at::date AS published_date,
+        c.last_modified_at,
         c.last_modified_at::date AS last_modified_date,
         c.year,
         c.severity,
@@ -129,8 +145,14 @@ exports.refreshTrendAnalytics = async (req, res) => {
         c.cwe_name,
         COALESCE(primary_match.vendor_name, 'Unknown') AS primary_vendor,
         COALESCE(primary_match.product_name, 'Unknown') AS primary_product,
+        (c.product_count > 0) AS has_mapped_products,
         c.reference_count,
         c.product_count,
+        1 AS total_cves,
+        CASE WHEN c.severity = 'CRITICAL' THEN 1 ELSE 0 END AS total_critical_cves,
+        CASE WHEN c.severity = 'HIGH' THEN 1 ELSE 0 END AS total_high_cves,
+        CASE WHEN c.has_kev THEN 1 ELSE 0 END AS total_known_exploits,
+        CASE WHEN c.product_count > 0 THEN 1 ELSE 0 END AS total_mapped_products,
         c.description
       FROM cves c
       LEFT JOIN LATERAL (

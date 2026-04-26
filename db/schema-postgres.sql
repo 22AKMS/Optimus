@@ -131,7 +131,9 @@ END $$;
 
 CREATE TABLE IF NOT EXISTS looker_cve_overview (
   cve_id TEXT PRIMARY KEY,
+  published_at TIMESTAMPTZ,
   published_date DATE,
+  last_modified_at TIMESTAMPTZ,
   last_modified_date DATE,
   year INTEGER,
   severity TEXT,
@@ -142,10 +144,26 @@ CREATE TABLE IF NOT EXISTS looker_cve_overview (
   cwe_name TEXT,
   primary_vendor TEXT,
   primary_product TEXT,
+  has_mapped_products BOOLEAN,
   reference_count INTEGER,
   product_count INTEGER,
+  total_cves INTEGER NOT NULL DEFAULT 1,
+  total_critical_cves INTEGER NOT NULL DEFAULT 0,
+  total_high_cves INTEGER NOT NULL DEFAULT 0,
+  total_known_exploits INTEGER NOT NULL DEFAULT 0,
+  total_mapped_products INTEGER NOT NULL DEFAULT 0,
   description TEXT
 );
+
+ALTER TABLE looker_cve_overview
+  ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS last_modified_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS has_mapped_products BOOLEAN,
+  ADD COLUMN IF NOT EXISTS total_cves INTEGER NOT NULL DEFAULT 1,
+  ADD COLUMN IF NOT EXISTS total_critical_cves INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS total_high_cves INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS total_known_exploits INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS total_mapped_products INTEGER NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS looker_daily_severity (
   published_date DATE NOT NULL,

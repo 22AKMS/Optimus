@@ -555,7 +555,7 @@ Host/IP: ${LOOKER_SQL_HOST:-Unavailable}
 Port: 5432
 Database: $DB_NAME
 Username: $LOOKER_DB_USER
-Reporting tables: looker_summary_metrics, looker_daily_severity, looker_vendor_year, looker_cve_explorer, looker_cve_overview
+Reporting table: looker_cve_overview
 Authorized connector network: $( [[ "$ENABLE_LOOKER_AUTH_NETWORK" == "yes" ]] && printf '142.251.74.0/23' || printf 'not added by installer' )
 
 OUT
