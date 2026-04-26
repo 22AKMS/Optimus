@@ -183,8 +183,17 @@ button:disabled {
   gap: 1rem;
 }
 
+.watch-dashboard {
+  grid-template-columns: minmax(0, 1.65fr) 360px;
+}
+
 .sidebar {
   align-self: start;
+}
+
+.watch-sidebar-panel {
+  position: sticky;
+  top: 1rem;
 }
 
 .stats-grid {
@@ -219,12 +228,14 @@ button:disabled {
 
 .item-card-body {
   padding: 1rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .cve-card-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-start;
-  justify-content: space-between;
   gap: 0.75rem;
   min-height: 2.8rem;
 }
@@ -233,10 +244,12 @@ button:disabled {
   margin: 0;
   flex: 1 1 auto;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .cve-card-badge {
   flex: 0 0 auto;
+  justify-self: end;
   white-space: nowrap;
 }
 
@@ -304,6 +317,49 @@ button:disabled {
   background: #fff;
 }
 
+.product-card,
+.watch-product-shell {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.product-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.85rem;
+}
+
+.product-card-copy {
+  min-width: 0;
+}
+
+.product-watch-button {
+  min-width: 102px;
+  white-space: nowrap;
+}
+
+.watched-feed-card.is-new {
+  border-color: #fca5a5;
+  box-shadow: 0 12px 30px rgba(153, 27, 27, 0.08);
+}
+
+.watch-card-title-row {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.watch-match-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.match-badge-new {
+  background: var(--critical-bg);
+  color: var(--critical-text);
+}
+
 .detail-layout {
   display: grid;
   gap: 1rem;
@@ -353,6 +409,14 @@ button:disabled {
   .sidebar {
     order: -1;
   }
+
+  .watch-dashboard .sidebar {
+    order: 0;
+  }
+
+  .watch-sidebar-panel {
+    position: static;
+  }
 }
 
 
@@ -368,6 +432,14 @@ button:disabled {
   .brand-mark {
     width: 72px;
     height: 72px;
+  }
+
+  .product-card-head {
+    flex-direction: column;
+  }
+
+  .product-watch-button {
+    width: 100%;
   }
 }
 
@@ -590,7 +662,7 @@ button:disabled {
   padding: 0.85rem 0.95rem;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: flex-start;
 }
 
 .stat-value {

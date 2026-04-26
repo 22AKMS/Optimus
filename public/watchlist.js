@@ -19,7 +19,7 @@ function escapeHtml(value) {
 function excerpt(text, size = 190) {
   const value = String(text || "").trim();
   if (value.length <= size) return value;
-  return `${value.slice(0, size).trim()}…`;
+  return `${value.slice(0, size).trim()}...`;
 }
 
 function severityClass(severity) {
@@ -69,7 +69,7 @@ function exploitSummary(cve) {
   if (!parts.length && isKnownValue(cve.vuln_status)) {
     parts.push(humanizeMetric(cve.vuln_status));
   }
-  return parts.slice(0, 3).join(" · ") || "Structured product data pending";
+  return parts.slice(0, 3).join(" / ") || "Structured product data pending";
 }
 
 function targetLabel(cve) {
@@ -77,7 +77,7 @@ function targetLabel(cve) {
     .map((value) => String(value || "").trim())
     .filter(isKnownValue);
 
-  if (parts.length === 2) return `${parts[0]} · ${parts[1]}`;
+  if (parts.length === 2) return `${parts[0]} / ${parts[1]}`;
   if (parts.length === 1) return parts[0];
   return exploitSummary(cve);
 }
@@ -98,41 +98,30 @@ function cveCard(cve) {
           <span class="badge">CVSS ${escapeHtml(scoreLabel(cve.cvss_base_score))}</span>
           <span class="badge">${escapeHtml(formatDate(cve.published_at))}</span>
         </div>
-        <a class="inline-link" href="/cves/${encodeURIComponent(cve.id)}">Open details →</a>
+        <a class="inline-link" href="/cves/${encodeURIComponent(cve.id)}">Open details -></a>
       </div>
     </article>
   `;
 }
 
 async function loadWatchlist() {
-  const data = await fetchJson('/api/watchlist');
-  const count = document.getElementById('watchlistCount');
-  const grid = document.getElementById('watchlistGrid');
-  const watched = document.getElementById('watchedProductsList');
+  const data = await fetchJson("/api/watchlist");
+  const count = document.getElementById("watchlistCount");
+  const grid = document.getElementById("watchlistGrid");
 
   count.textContent = `${data.count || 0} saved`;
 
   if (!data.items || !data.items.length) {
     grid.innerHTML = '<div class="panel empty-state">No saved CVEs yet. Save a CVE from its detail page and it will show up here.</div>';
-  } else {
-    grid.innerHTML = data.items.map(cveCard).join('');
-  }
-
-  if (!data.watched_products || !data.watched_products.length) {
-    watched.innerHTML = '<div class="empty-state">No watched products yet.</div>';
     return;
   }
 
-  watched.innerHTML = data.watched_products.map((product) => `
-    <article class="mini-card">
-      <strong>${escapeHtml(product.vendor_name || 'Unknown vendor')} · ${escapeHtml(product.product_name || 'Unknown product')}</strong>
-      <p class="muted compact">Product ID ${escapeHtml(product.product_id)}</p>
-    </article>
-  `).join('');
+  grid.innerHTML = data.items.map(cveCard).join("");
 }
 
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener("DOMContentLoaded", () => {
   loadWatchlist().catch((error) => {
-    document.getElementById('watchlistGrid').innerHTML = `<div class="panel empty-state">${escapeHtml(error.message || String(error))}</div>`;
+    const message = escapeHtml(error.message || String(error));
+    document.getElementById("watchlistGrid").innerHTML = `<div class="panel empty-state">${message}</div>`;
   });
 });

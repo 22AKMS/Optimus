@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title><%= appName %> - Watchlist</title>
+  <title><%= appName %> - Saved CVEs</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/png" href="/static/favicon.png">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
@@ -11,34 +11,28 @@
 <body data-user-id="<%= appUserId %>">
   <header class="page-header slim">
     <div class="detail-topbar">
-      <a class="back-link" href="/">← Back to CVE list</a>
+      <a class="back-link" href="/">Back to CVE list</a>
       <div class="header-actions">
         <% if (sharedLookerStudioUrl) { %>
           <a class="nav-button secondary" href="<%= sharedLookerStudioUrl %>" target="_blank" rel="noopener noreferrer">Looker Studio</a>
         <% } %>
+        <a class="nav-button secondary" href="/watched-products">Watched Products</a>
         <div class="brand-inline">
           <img src="/static/favicon.png" alt="Optimus logo" class="brand-mark small">
           <span class="eyebrow compact-eyebrow"><%= appName %></span>
         </div>
       </div>
     </div>
-    <h1 class="watchlist-title">Watchlist</h1>
-    <p class="header-copy">Saved CVEs for the current demo user.</p>
+    <h1 class="watchlist-title">Saved CVEs</h1>
+    <p class="header-copy">Cases pinned by the current demo user for later review.</p>
   </header>
 
   <main class="layout detail-layout">
     <section class="section-title-row">
-      <h2>Saved CVEs</h2>
+      <h2>Saved Vulnerabilities</h2>
       <span id="watchlistCount" class="pill"></span>
     </section>
     <div id="watchlistGrid" class="card-grid"></div>
-
-    <section class="panel watched-products-panel">
-      <div class="section-title-row">
-        <h2>Watched Products</h2>
-      </div>
-      <div id="watchedProductsList" class="stack"></div>
-    </section>
   </main>
 
   <script src="/static/watchlist.js" defer></script>

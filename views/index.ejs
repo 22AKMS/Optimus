@@ -22,7 +22,8 @@
         <% if (sharedLookerStudioUrl) { %>
           <a class="nav-button secondary" href="<%= sharedLookerStudioUrl %>" target="_blank" rel="noopener noreferrer">Looker Studio</a>
         <% } %>
-        <a class="nav-button" href="/watchlist">Watchlist</a>
+        <a class="nav-button secondary" href="/watchlist">Saved CVEs</a>
+        <a class="nav-button" href="/watched-products">Watched Products</a>
       </div>
     </div>
   </header>
@@ -78,7 +79,7 @@
         </div>
         <label class="toggle-control control-span-toggle" for="normalizedOnlyToggle">
           <input id="normalizedOnlyToggle" type="checkbox">
-          <span>Normalized affected software only</span>
+          <span>Hide unmapped CVEs</span>
         </label>
         <button id="searchButton" class="control-apply">Apply</button>
       </div>

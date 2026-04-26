@@ -119,78 +119,57 @@ BEGIN
         'looker_summary_metrics',
         'looker_cve_explorer'
       )
-      AND c.relkind IN ('v', 'm')
+      AND c.relkind IN ('r', 'p', 'v', 'm')
   LOOP
     EXECUTE format(
       'DROP %s IF EXISTS public.%I CASCADE',
-      CASE WHEN rec.relkind = 'm' THEN 'MATERIALIZED VIEW' ELSE 'VIEW' END,
+      CASE
+        WHEN rec.relkind = 'm' THEN 'MATERIALIZED VIEW'
+        WHEN rec.relkind = 'v' THEN 'VIEW'
+        ELSE 'TABLE'
+      END,
       rec.relname
     );
   END LOOP;
 END $$;
 
-CREATE TABLE IF NOT EXISTS looker_cve_overview (
-  cve_id TEXT PRIMARY KEY,
-  published_date DATE,
-  last_modified_date DATE,
-  year INTEGER,
-  severity TEXT,
-  cvss_base_score NUMERIC(4,1),
-  trending_score NUMERIC(8,2),
-  has_kev BOOLEAN,
-  cwe_id TEXT,
-  cwe_name TEXT,
-  primary_vendor TEXT,
-  primary_product TEXT,
-  reference_count INTEGER,
-  product_count INTEGER,
-  description TEXT
-);
-
-CREATE TABLE IF NOT EXISTS looker_daily_severity (
-  published_date DATE NOT NULL,
-  severity TEXT NOT NULL,
-  cve_count INTEGER NOT NULL,
-  max_cvss NUMERIC(4,1),
-  avg_cvss NUMERIC(4,2),
-  PRIMARY KEY (published_date, severity)
-);
-
-CREATE TABLE IF NOT EXISTS looker_vendor_year (
-  year INTEGER NOT NULL,
-  vendor_name TEXT NOT NULL,
-  severity TEXT NOT NULL,
-  cve_count INTEGER NOT NULL,
-  critical_count INTEGER NOT NULL,
-  avg_cvss NUMERIC(4,2),
-  PRIMARY KEY (year, vendor_name, severity)
-);
-
-CREATE TABLE IF NOT EXISTS looker_summary_metrics (
-  singleton_key SMALLINT PRIMARY KEY DEFAULT 1,
-  total_cves INTEGER,
-  critical_cves INTEGER,
-  normalized_software_cves INTEGER,
-  average_cvss NUMERIC(4,2),
-  latest_publish_date DATE,
-  latest_nvd_update DATE
-);
-
-CREATE TABLE IF NOT EXISTS looker_cve_explorer (
-  cve_id TEXT PRIMARY KEY,
-  published_at TIMESTAMPTZ,
-  last_modified_at TIMESTAMPTZ,
-  year INTEGER,
-  severity TEXT,
-  cvss_base_score NUMERIC(4,1),
-  trending_score NUMERIC(8,2),
-  has_kev BOOLEAN,
-  cwe_id TEXT,
-  cwe_name TEXT,
-  primary_vendor TEXT,
-  primary_product TEXT,
-  has_normalized_software BOOLEAN,
-  product_count INTEGER,
-  reference_count INTEGER,
-  description TEXT
-);
+CREATE VIEW looker_cve_overview AS
+SELECT
+  c.id AS cve_id,
+  c.published_at,
+  c.published_at::date AS published_date,
+  c.last_modified_at,
+  c.last_modified_at::date AS last_modified_date,
+  c.year,
+  COALESCE(c.severity, 'UNKNOWN') AS severity,
+  c.cvss_base_score,
+  c.trending_score,
+  c.has_kev,
+  c.cwe_id,
+  c.cwe_name,
+  COALESCE(primary_match.vendor_name, 'Unknown') AS primary_vendor,
+  COALESCE(primary_match.product_name, 'Unknown') AS primary_product,
+  (c.product_count > 0) AS has_mapped_products,
+  c.reference_count,
+  c.product_count,
+  1::integer AS cve_count,
+  CASE WHEN COALESCE(c.severity, 'UNKNOWN') = 'CRITICAL' THEN 1 ELSE 0 END::integer AS critical_cve_count,
+  CASE WHEN COALESCE(c.severity, 'UNKNOWN') = 'HIGH' THEN 1 ELSE 0 END::integer AS high_cve_count,
+  CASE WHEN c.has_kev THEN 1 ELSE 0 END::integer AS known_exploit_count,
+  CASE WHEN c.product_count > 0 THEN 1 ELSE 0 END::integer AS mapped_product_cve_count,
+  1::integer AS total_cves,
+  CASE WHEN COALESCE(c.severity, 'UNKNOWN') = 'CRITICAL' THEN 1 ELSE 0 END::integer AS total_critical_cves,
+  CASE WHEN COALESCE(c.severity, 'UNKNOWN') = 'HIGH' THEN 1 ELSE 0 END::integer AS total_high_cves,
+  CASE WHEN c.has_kev THEN 1 ELSE 0 END::integer AS total_known_exploits,
+  CASE WHEN c.product_count > 0 THEN 1 ELSE 0 END::integer AS total_mapped_products,
+  c.description
+FROM cves c
+LEFT JOIN LATERAL (
+  SELECT v.name AS vendor_name, p.name AS product_name
+  FROM cve_products cp
+  JOIN products p ON p.id = cp.product_id
+  JOIN vendors v ON v.id = p.vendor_id
+  WHERE cp.cve_id = c.id
+  ORDER BY v.name ASC, p.name ASC
+  LIMIT 1
+) primary_match ON TRUE;

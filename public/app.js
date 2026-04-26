@@ -179,10 +179,10 @@ function renderOverview(payload) {
 
   const cards = [
     statCard("Total CVEs", formatCount(totalCves)),
-    statCard("Critical CVEs", formatCount(overview.critical_cves || 0), `${formatCount(overview.high_cves || 0)} high severity CVEs`),
-    statCard("Known Exploited", formatCount(overview.kev_cves || 0), "CISA KEV-matched items"),
+    statCard("Total Critical CVEs", formatCount(overview.critical_cves || 0), `${formatCount(overview.high_cves || 0)} high severity CVEs`),
+    statCard("Total Known Exploits", formatCount(overview.kev_cves || 0), "CISA KEV-matched items"),
     statCard("Oldest Publish Date", overview.oldest_published_at ? formatDate(overview.oldest_published_at) : "No data", lastSyncDetail(latestRun)),
-    statCard("Normalized Software", formatCount(normalizedCves), `${normalizedShare}% of catalog mapped to products`)
+    statCard("Total Normalized Software", formatCount(normalizedCves), `${normalizedShare}% of catalog mapped to products`)
   ];
 
   grid.innerHTML = cards.join("");
@@ -335,11 +335,7 @@ async function loadHighSeverity() {
 }
 
 async function loadOverview() {
-  const params = new URLSearchParams();
-  const { days } = currentQueryState();
-  if (days) params.set("days", days);
-  const query = params.toString();
-  const data = await fetchJson(query ? `/api/analytics/overview?${query}` : "/api/analytics/overview");
+  const data = await fetchJson("/api/analytics/overview");
   renderOverview(data);
 }
 

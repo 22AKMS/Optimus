@@ -322,7 +322,7 @@ show_lookerstudio_fields() {
   else
     say "Username: not detected automatically"
   fi
-  say "Reporting tables: looker_summary_metrics, looker_daily_severity, looker_vendor_year, looker_cve_explorer, looker_cve_overview"
+  say "Reporting table: looker_cve_overview"
   say "Authorized connector networks: ${authorized_networks:-none found}"
   say "Password: not stored here; use the Looker Studio read-only password chosen during install or reset it in Cloud SQL."
 }
