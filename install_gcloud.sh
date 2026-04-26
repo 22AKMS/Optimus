@@ -329,21 +329,7 @@ SQL
   psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PROXY_PORT" -U "$DB_USER" -d "$DB_NAME" <<SQL >/dev/null
 GRANT CONNECT ON DATABASE $DB_NAME TO $LOOKER_DB_USER;
 GRANT USAGE ON SCHEMA public TO $LOOKER_DB_USER;
-GRANT SELECT ON TABLE
-  vendors,
-  products,
-  cves,
-  cve_products,
-  cve_references,
-  ingest_runs,
-  analytics_daily_severity,
-  analytics_vendor_year,
-  looker_cve_overview,
-  looker_daily_severity,
-  looker_vendor_year,
-  looker_summary_metrics,
-  looker_cve_explorer
-TO $LOOKER_DB_USER;
+GRANT SELECT ON TABLE looker_cve_overview TO $LOOKER_DB_USER;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO $LOOKER_DB_USER;
 SQL
 }

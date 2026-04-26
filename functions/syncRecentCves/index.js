@@ -59,6 +59,102 @@ function recentWindowPredicate(columnSql, placeholderIndex) {
   `;
 }
 
+const lookerOverviewViewSql = `
+  CREATE VIEW looker_cve_overview AS
+  SELECT
+    c.id AS cve_id,
+    c.published_at,
+    c.published_at::date AS published_date,
+    c.last_modified_at,
+    c.last_modified_at::date AS last_modified_date,
+    c.year,
+    COALESCE(c.severity, 'UNKNOWN') AS severity,
+    c.cvss_base_score,
+    c.trending_score,
+    c.has_kev,
+    c.cwe_id,
+    c.cwe_name,
+    COALESCE(primary_match.vendor_name, 'Unknown') AS primary_vendor,
+    COALESCE(primary_match.product_name, 'Unknown') AS primary_product,
+    (c.product_count > 0) AS has_mapped_products,
+    c.reference_count,
+    c.product_count,
+    1::integer AS cve_count,
+    CASE WHEN COALESCE(c.severity, 'UNKNOWN') = 'CRITICAL' THEN 1 ELSE 0 END::integer AS critical_cve_count,
+    CASE WHEN COALESCE(c.severity, 'UNKNOWN') = 'HIGH' THEN 1 ELSE 0 END::integer AS high_cve_count,
+    CASE WHEN c.has_kev THEN 1 ELSE 0 END::integer AS known_exploit_count,
+    CASE WHEN c.product_count > 0 THEN 1 ELSE 0 END::integer AS mapped_product_cve_count,
+    1::integer AS total_cves,
+    CASE WHEN COALESCE(c.severity, 'UNKNOWN') = 'CRITICAL' THEN 1 ELSE 0 END::integer AS total_critical_cves,
+    CASE WHEN COALESCE(c.severity, 'UNKNOWN') = 'HIGH' THEN 1 ELSE 0 END::integer AS total_high_cves,
+    CASE WHEN c.has_kev THEN 1 ELSE 0 END::integer AS total_known_exploits,
+    CASE WHEN c.product_count > 0 THEN 1 ELSE 0 END::integer AS total_mapped_products,
+    c.description
+  FROM cves c
+  LEFT JOIN LATERAL (
+    SELECT v.name AS vendor_name, p.name AS product_name
+    FROM cve_products cp
+    JOIN products p ON p.id = cp.product_id
+    JOIN vendors v ON v.id = p.vendor_id
+    WHERE cp.cve_id = c.id
+    ORDER BY v.name ASC, p.name ASC
+    LIMIT 1
+  ) primary_match ON TRUE
+`;
+
+async function rebuildLookerOverviewView(client) {
+  await client.query(`
+    DO $$
+    DECLARE rec record;
+    BEGIN
+      FOR rec IN
+        SELECT c.relname, c.relkind
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relname IN (
+            'looker_cve_overview',
+            'looker_daily_severity',
+            'looker_vendor_year',
+            'looker_summary_metrics',
+            'looker_cve_explorer'
+          )
+          AND c.relkind IN ('r', 'p', 'v', 'm')
+      LOOP
+        EXECUTE format(
+          'DROP %s IF EXISTS public.%I CASCADE',
+          CASE
+            WHEN rec.relkind = 'm' THEN 'MATERIALIZED VIEW'
+            WHEN rec.relkind = 'v' THEN 'VIEW'
+            ELSE 'TABLE'
+          END,
+          rec.relname
+        );
+      END LOOP;
+    END $$
+  `);
+  await client.query(lookerOverviewViewSql);
+  await client.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'looker_reader') THEN
+        GRANT SELECT ON public.looker_cve_overview TO looker_reader;
+      END IF;
+    END $$
+  `);
+
+  const countResult = await client.query(`
+    SELECT
+      (SELECT COUNT(*)::int FROM cves) AS source_count,
+      (SELECT COUNT(*)::int FROM looker_cve_overview) AS overview_count
+  `);
+  const counts = countResult.rows[0] || {};
+  if (Number(counts.source_count || 0) !== Number(counts.overview_count || 0)) {
+    throw new Error(`looker_cve_overview count mismatch: source=${counts.source_count}, overview=${counts.overview_count}`);
+  }
+  return counts;
+}
+
 function deriveWindowDaysFromRange(startIso, endIso, fallback) {
   const start = Date.parse(startIso);
   const end = Date.parse(endIso);
@@ -341,125 +437,7 @@ async function refreshAnalytics(client, windowDays) {
     GROUP BY c.year, v.name, COALESCE(c.severity, 'UNKNOWN')
   `, [windowDays]);
 
-  await client.query("TRUNCATE looker_daily_severity");
-  await client.query(`
-    INSERT INTO looker_daily_severity (published_date, severity, cve_count, max_cvss, avg_cvss)
-    SELECT published_date, severity, cve_count, max_cvss, avg_cvss
-    FROM analytics_daily_severity
-    `);
-
-  await client.query("TRUNCATE looker_vendor_year");
-  await client.query(`
-    INSERT INTO looker_vendor_year (year, vendor_name, severity, cve_count, critical_count, avg_cvss)
-    SELECT year, vendor_name, severity, cve_count, critical_count, avg_cvss
-    FROM analytics_vendor_year
-    `);
-
-  await client.query("TRUNCATE looker_summary_metrics");
-  await client.query(`
-    INSERT INTO looker_summary_metrics (singleton_key, total_cves, critical_cves, normalized_software_cves, average_cvss, latest_publish_date, latest_nvd_update)
-    SELECT
-      1,
-      COUNT(*)::INTEGER,
-      SUM(CASE WHEN severity = 'CRITICAL' THEN 1 ELSE 0 END)::INTEGER,
-      SUM(CASE WHEN product_count > 0 THEN 1 ELSE 0 END)::INTEGER,
-      ROUND(AVG(cvss_base_score)::numeric, 2),
-      MAX(published_at)::date,
-      MAX(last_modified_at)::date
-    FROM cves
-    `);
-
-  await client.query(`
-    ALTER TABLE looker_cve_overview
-      ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ,
-      ADD COLUMN IF NOT EXISTS last_modified_at TIMESTAMPTZ,
-      ADD COLUMN IF NOT EXISTS has_mapped_products BOOLEAN,
-      ADD COLUMN IF NOT EXISTS total_cves INTEGER NOT NULL DEFAULT 1,
-      ADD COLUMN IF NOT EXISTS total_critical_cves INTEGER NOT NULL DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS total_high_cves INTEGER NOT NULL DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS total_known_exploits INTEGER NOT NULL DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS total_mapped_products INTEGER NOT NULL DEFAULT 0
-  `);
-
-  await client.query("TRUNCATE looker_cve_overview");
-  await client.query(`
-    INSERT INTO looker_cve_overview (
-      cve_id, published_at, published_date, last_modified_at, last_modified_date, year, severity,
-      cvss_base_score, trending_score, has_kev, cwe_id, cwe_name, primary_vendor, primary_product,
-      has_mapped_products, reference_count, product_count, total_cves, total_critical_cves,
-      total_high_cves, total_known_exploits, total_mapped_products, description
-    )
-    SELECT
-      c.id AS cve_id,
-      c.published_at,
-      c.published_at::date AS published_date,
-      c.last_modified_at,
-      c.last_modified_at::date AS last_modified_date,
-      c.year,
-      c.severity,
-      c.cvss_base_score,
-      c.trending_score,
-      c.has_kev,
-      c.cwe_id,
-      c.cwe_name,
-      COALESCE(primary_match.vendor_name, 'Unknown') AS primary_vendor,
-      COALESCE(primary_match.product_name, 'Unknown') AS primary_product,
-      (c.product_count > 0) AS has_mapped_products,
-      c.reference_count,
-      c.product_count,
-      1 AS total_cves,
-      CASE WHEN c.severity = 'CRITICAL' THEN 1 ELSE 0 END AS total_critical_cves,
-      CASE WHEN c.severity = 'HIGH' THEN 1 ELSE 0 END AS total_high_cves,
-      CASE WHEN c.has_kev THEN 1 ELSE 0 END AS total_known_exploits,
-      CASE WHEN c.product_count > 0 THEN 1 ELSE 0 END AS total_mapped_products,
-      c.description
-    FROM cves c
-    LEFT JOIN LATERAL (
-      SELECT v.name AS vendor_name, p.name AS product_name
-      FROM cve_products cp
-      JOIN products p ON p.id = cp.product_id
-      JOIN vendors v ON v.id = p.vendor_id
-      WHERE cp.cve_id = c.id
-      ORDER BY v.name ASC, p.name ASC
-      LIMIT 1
-    ) primary_match ON TRUE
-    `);
-
-  await client.query("TRUNCATE looker_cve_explorer");
-  await client.query(`
-    INSERT INTO looker_cve_explorer (
-      cve_id, published_at, last_modified_at, year, severity, cvss_base_score, trending_score, has_kev,
-      cwe_id, cwe_name, primary_vendor, primary_product, has_normalized_software, product_count, reference_count, description
-    )
-    SELECT
-      c.id AS cve_id,
-      c.published_at,
-      c.last_modified_at,
-      c.year,
-      c.severity,
-      c.cvss_base_score,
-      c.trending_score,
-      c.has_kev,
-      c.cwe_id,
-      c.cwe_name,
-      COALESCE(primary_match.vendor_name, 'Unknown') AS primary_vendor,
-      COALESCE(primary_match.product_name, 'Unknown') AS primary_product,
-      (c.product_count > 0) AS has_normalized_software,
-      c.product_count,
-      c.reference_count,
-      c.description
-    FROM cves c
-    LEFT JOIN LATERAL (
-      SELECT v.name AS vendor_name, p.name AS product_name
-      FROM cve_products cp
-      JOIN products p ON p.id = cp.product_id
-      JOIN vendors v ON v.id = p.vendor_id
-      WHERE cp.cve_id = c.id
-      ORDER BY v.name ASC, p.name ASC
-      LIMIT 1
-    ) primary_match ON TRUE
-    `);
-
+  return rebuildLookerOverviewView(client);
 }
 
 async function getVendorId(client, vendorName, lookupCache) {
@@ -683,12 +661,13 @@ exports.syncRecentCves = async (req, res) => {
     }
 
     const client = await pool.connect();
+    let lookerCounts = null;
     try {
       await persistRecords(client, records);
 
       await client.query("BEGIN");
       try {
-        await refreshAnalytics(client, reportingWindowDays);
+        lookerCounts = await refreshAnalytics(client, reportingWindowDays);
         await client.query("COMMIT");
       } catch (error) {
         await client.query("ROLLBACK");
@@ -704,7 +683,7 @@ exports.syncRecentCves = async (req, res) => {
       WHERE id = $1
     `, [runId, records.length, `Synced ${records.length} CVEs using ${windowType} window from ${startIso} to ${endIso}${unlimitedWindow ? " (full window)" : ""}.`]);
 
-    res.json({ ok: true, synced: records.length, start_date: startIso, end_date: endIso, full_window: unlimitedWindow, days, window_days: reportingWindowDays });
+    res.json({ ok: true, synced: records.length, start_date: startIso, end_date: endIso, full_window: unlimitedWindow, days, window_days: reportingWindowDays, looker_counts: lookerCounts });
   } catch (error) {
     await pool.query(`
       UPDATE ingest_runs
