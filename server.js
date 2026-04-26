@@ -277,31 +277,30 @@ app.get("/cves/:cveId", (req, res) => {
 
 app.get("/api/analytics/overview", async (req, res) => {
   try {
-    const [latestRunResult] = await Promise.all([
+    const windowDays = parseRecentWindowDays(req.query.days || process.env.DEFAULT_SYNC_WINDOW_DAYS || 30, 30);
+    const severityExpr = normalizedSeveritySql("severity", "cvss_base_score");
+
+    const [latestRunResult, overviewResult] = await Promise.all([
       query(`
         SELECT started_at, finished_at, status, cve_count, note
         FROM ingest_runs
         ORDER BY started_at DESC
         LIMIT 1
+      `),
+      query(`
+        SELECT
+          COUNT(*)::int AS total_cves,
+          COUNT(*) FILTER (WHERE ${severityExpr} = 'CRITICAL')::int AS critical_cves,
+          COUNT(*) FILTER (WHERE ${severityExpr} = 'HIGH')::int AS high_cves,
+          COUNT(*) FILTER (WHERE has_kev)::int AS kev_cves,
+          COUNT(*) FILTER (WHERE product_count > 0)::int AS normalized_cves,
+          MIN(published_at) AS oldest_published_at,
+          MAX(last_modified_at) AS latest_modified_at
+        FROM cves
       `)
     ]);
 
     const latestRun = latestRunResult.rows[0] || null;
-    const windowDays = parseRecentWindowDays(req.query.days || process.env.DEFAULT_SYNC_WINDOW_DAYS || 30, 30);
-    const severityExpr = normalizedSeveritySql("severity", "cvss_base_score");
-
-    const overviewResult = await query(`
-      SELECT
-        COUNT(*)::int AS total_cves,
-        COUNT(*) FILTER (WHERE ${severityExpr} = 'CRITICAL')::int AS critical_cves,
-        COUNT(*) FILTER (WHERE ${severityExpr} = 'HIGH')::int AS high_cves,
-        COUNT(*) FILTER (WHERE has_kev)::int AS kev_cves,
-        COUNT(*) FILTER (WHERE product_count > 0)::int AS normalized_cves,
-        MIN(published_at) AS oldest_published_at,
-        MAX(last_modified_at) AS latest_modified_at
-      FROM cves
-      WHERE ${recentWindowPredicate("published_at", 1)}
-    `, [windowDays]);
 
     res.json({
       overview: overviewResult.rows[0],

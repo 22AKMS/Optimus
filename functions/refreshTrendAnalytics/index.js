@@ -108,8 +108,7 @@ exports.refreshTrendAnalytics = async (req, res) => {
         MAX(published_at)::date,
         MAX(last_modified_at)::date
       FROM cves
-      WHERE ${recentWindowPredicate("published_at", 1)}
-    `, [windowDays]);
+    `);
 
     await client.query("TRUNCATE looker_cve_overview");
     await client.query(`
@@ -143,8 +142,7 @@ exports.refreshTrendAnalytics = async (req, res) => {
         ORDER BY v.name ASC, p.name ASC
         LIMIT 1
       ) primary_match ON TRUE
-      WHERE ${recentWindowPredicate("c.published_at", 1)}
-    `, [windowDays]);
+    `);
 
     await client.query("TRUNCATE looker_cve_explorer");
     await client.query(`
@@ -179,8 +177,7 @@ exports.refreshTrendAnalytics = async (req, res) => {
         ORDER BY v.name ASC, p.name ASC
         LIMIT 1
       ) primary_match ON TRUE
-      WHERE ${recentWindowPredicate("c.published_at", 1)}
-    `, [windowDays]);
+    `);
 
     await client.query("COMMIT");
     res.json({ ok: true, window_days: windowDays });

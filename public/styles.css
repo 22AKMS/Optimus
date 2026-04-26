@@ -228,12 +228,14 @@ button:disabled {
 
 .item-card-body {
   padding: 1rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .cve-card-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-start;
-  justify-content: space-between;
   gap: 0.75rem;
   min-height: 2.8rem;
 }
@@ -242,10 +244,12 @@ button:disabled {
   margin: 0;
   flex: 1 1 auto;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .cve-card-badge {
   flex: 0 0 auto;
+  justify-self: end;
   white-space: nowrap;
 }
 
@@ -658,7 +662,7 @@ button:disabled {
   padding: 0.85rem 0.95rem;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: flex-start;
 }
 
 .stat-value {

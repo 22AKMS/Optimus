@@ -367,8 +367,7 @@ async function refreshAnalytics(client, windowDays) {
       MAX(published_at)::date,
       MAX(last_modified_at)::date
     FROM cves
-    WHERE ${recentWindowPredicate("published_at", 1)}
-    `, [windowDays]);
+    `);
 
   await client.query("TRUNCATE looker_cve_overview");
   await client.query(`
@@ -402,8 +401,7 @@ async function refreshAnalytics(client, windowDays) {
       ORDER BY v.name ASC, p.name ASC
       LIMIT 1
     ) primary_match ON TRUE
-    WHERE ${recentWindowPredicate("c.published_at", 1)}
-    `, [windowDays]);
+    `);
 
   await client.query("TRUNCATE looker_cve_explorer");
   await client.query(`
@@ -438,8 +436,7 @@ async function refreshAnalytics(client, windowDays) {
       ORDER BY v.name ASC, p.name ASC
       LIMIT 1
     ) primary_match ON TRUE
-    WHERE ${recentWindowPredicate("c.published_at", 1)}
-    `, [windowDays]);
+    `);
 
 }
 
