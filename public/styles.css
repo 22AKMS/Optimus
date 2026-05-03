@@ -273,6 +273,35 @@ button:disabled {
   justify-content: flex-start;
 }
 
+.title-with-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.title-with-help h2 {
+  margin-bottom: 0;
+}
+
+.help-icon-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: white;
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.help-icon-link:hover {
+  background: var(--accent-soft);
+}
+
 .badge,
 .pill {
   display: inline-flex;
@@ -315,6 +344,7 @@ button:disabled {
   border-radius: 12px;
   padding: 0.85rem;
   background: #fff;
+  min-width: 0;
 }
 
 .product-card,
@@ -327,14 +357,23 @@ button:disabled {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 0.85rem;
 }
 
 .product-card-copy {
+  flex: 1 1 240px;
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.product-card-copy .compact {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .product-watch-button {
+  flex: 0 0 auto;
   min-width: 102px;
   white-space: nowrap;
 }
@@ -397,6 +436,47 @@ button:disabled {
 
 .inline-link {
   font-weight: 600;
+}
+
+#referencesList .inline-link {
+  display: block;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.25;
+}
+
+.help-panel {
+  max-width: 980px;
+}
+
+.help-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.formula-code {
+  display: block;
+  width: 100%;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.score-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.score-table th,
+.score-table td {
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.score-table th:last-child,
+.score-table td:last-child {
+  text-align: right;
 }
 
 @media (max-width: 980px) {
@@ -736,7 +816,8 @@ button:disabled {
 
 @media (max-width: 640px) {
   .controls-grid,
-  .stats-grid {
+  .stats-grid,
+  .help-grid {
     grid-template-columns: 1fr;
   }
 

@@ -54,6 +54,10 @@ function scoreLabel(score) {
   return score === null || score === undefined ? "N/A" : Number(score).toFixed(1);
 }
 
+function threatScoreLabel(score) {
+  return Number(score || 0).toFixed(1);
+}
+
 function isKnownValue(value) {
   const normalized = String(value || "").trim();
   return normalized && !/^unknown\b/i.test(normalized);
@@ -149,7 +153,7 @@ function cveCard(cve) {
   `;
 }
 
-function highSeverityCard(cve) {
+function threatScoreCard(cve) {
   const severity = cve.severity || "UNKNOWN";
   return `
     <a class="card-link mini-card" href="/cves/${encodeURIComponent(cve.id)}">
@@ -160,6 +164,7 @@ function highSeverityCard(cve) {
       <div class="muted compact">${escapeHtml(targetLabel(cve))}</div>
       <div class="badge-row left-align">
         <span class="badge">CVSS ${escapeHtml(scoreLabel(cve.cvss_base_score))}</span>
+        <span class="badge">Threat ${escapeHtml(threatScoreLabel(cve.trending_score))}</span>
         <span class="badge">${escapeHtml(formatDate(cve.published_at))}</span>
       </div>
     </a>
@@ -318,20 +323,20 @@ async function loadCves(page = 1) {
   syncUrl(state.pagination.page || page);
 }
 
-async function loadHighSeverity() {
+async function loadThreatScoreCves() {
   const params = new URLSearchParams();
   const { days } = currentQueryState();
   if (days) params.set("days", days);
   const query = params.toString();
-  const data = await fetchJson(query ? `/api/high-severity?${query}` : "/api/high-severity");
-  const target = document.getElementById("highSeverityList");
+  const data = await fetchJson(query ? `/api/threat-score-cves?${query}` : "/api/threat-score-cves");
+  const target = document.getElementById("threatScoreList");
 
   if (!data.items || !data.items.length) {
-    target.innerHTML = '<div class="empty-state">No high-severity CVEs in this window.</div>';
+    target.innerHTML = '<div class="empty-state">No threat-scored CVEs in this window.</div>';
     return;
   }
 
-  target.innerHTML = data.items.map(highSeverityCard).join("");
+  target.innerHTML = data.items.map(threatScoreCard).join("");
 }
 
 async function loadOverview() {
@@ -343,7 +348,7 @@ async function refreshDashboard(page = 1) {
   await Promise.all([
     loadOverview(),
     loadCves(page),
-    loadHighSeverity()
+    loadThreatScoreCves()
   ]);
 }
 

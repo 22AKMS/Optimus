@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title><%= appName %> - Threat Score</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/png" href="/static/favicon.png">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body data-user-id="<%= appUserId %>">
+  <header class="page-header slim">
+    <div class="detail-topbar">
+      <a class="back-link" href="/">Back to CVE list</a>
+      <div class="header-actions">
+        <% if (sharedLookerStudioUrl) { %>
+          <a class="nav-button secondary" href="<%= sharedLookerStudioUrl %>" target="_blank" rel="noopener noreferrer">Looker Studio</a>
+        <% } %>
+        <a class="nav-button secondary" href="/watchlist">Saved CVEs</a>
+        <a class="nav-button secondary" href="/watched-products">Watched Products</a>
+        <div class="brand-inline">
+          <img src="/static/favicon.png" alt="Optimus logo" class="brand-mark small">
+          <span class="eyebrow compact-eyebrow"><%= appName %></span>
+        </div>
+      </div>
+    </div>
+    <h1 class="watchlist-title">Threat Score</h1>
+    <p class="header-copy">A prioritization score calculated from CVSS impact, severity category, known exploitation, and recency.</p>
+  </header>
+
+  <main class="layout detail-layout">
+    <section class="panel help-panel stack">
+      <div>
+        <p class="eyebrow">Formula</p>
+        <code class="formula-code">Threat Score = (CVSS base score * 10) + severity weight + KEV bonus + recency bonus</code>
+      </div>
+
+      <div class="help-grid">
+        <article class="mini-card stack tight">
+          <h2>CVSS Base Score</h2>
+          <p class="muted compact">The NVD CVSS base score is multiplied by 10. A CVSS 10.0 item contributes 100 points.</p>
+        </article>
+
+        <article class="mini-card stack tight">
+          <h2>Severity Weight</h2>
+          <table class="score-table">
+            <thead>
+              <tr>
+                <th>Severity</th>
+                <th>Points</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>CRITICAL</td><td>60</td></tr>
+              <tr><td>HIGH</td><td>48</td></tr>
+              <tr><td>MEDIUM</td><td>36</td></tr>
+              <tr><td>LOW</td><td>24</td></tr>
+              <tr><td>NONE</td><td>12</td></tr>
+              <tr><td>UNKNOWN</td><td>0</td></tr>
+            </tbody>
+          </table>
+        </article>
+
+        <article class="mini-card stack tight">
+          <h2>KEV Bonus</h2>
+          <p class="muted compact">CVEs marked as known exploited through CISA KEV data receive 18 additional points.</p>
+        </article>
+
+        <article class="mini-card stack tight">
+          <h2>Recency Bonus</h2>
+          <p class="muted compact">Newly published CVEs receive up to 30 additional points. The bonus decreases with age and reaches 0 after 30 days.</p>
+        </article>
+      </div>
+
+      <div class="mini-card stack tight">
+        <h2>Example</h2>
+        <p class="muted compact">A new CRITICAL CVE with CVSS 10.0 and no KEV flag scores about 190: 100 CVSS points, 60 severity points, 0 KEV points, and about 30 recency points.</p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

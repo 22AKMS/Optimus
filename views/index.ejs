@@ -67,7 +67,7 @@
             <option value="newest">Published date</option>
             <option value="severity">Severity</option>
             <option value="modified">Last modified</option>
-            <option value="trending">Trending</option>
+            <option value="trending">Threat score</option>
           </select>
         </div>
         <div class="control-field control-span-direction">
@@ -102,9 +102,12 @@
       <aside class="sidebar stack">
         <div class="panel">
           <div class="section-title-row">
-            <h2>Highest Severity</h2>
+            <div class="title-with-help">
+              <h2>Threat Score</h2>
+              <a class="help-icon-link" href="/threat-score-help" aria-label="How threat score is calculated" title="How threat score is calculated">?</a>
+            </div>
           </div>
-          <div id="highSeverityList" class="stack"></div>
+          <div id="threatScoreList" class="stack"></div>
         </div>
 
         <% if (sharedLookerStudioUrl) { %>

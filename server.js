@@ -269,6 +269,10 @@ app.get("/watched-products", (req, res) => {
   res.render("watched-products", viewContext());
 });
 
+app.get("/threat-score-help", (req, res) => {
+  res.render("threat-score-help", viewContext());
+});
+
 app.get("/cves/:cveId", (req, res) => {
   res.render("cve", viewContext({
     cveId: String(req.params.cveId || "").trim().toUpperCase()
@@ -475,7 +479,7 @@ app.get("/api/cves", async (req, res) => {
   }
 });
 
-app.get("/api/high-severity", async (req, res) => {
+app.get(["/api/threat-score-cves", "/api/trending-cves", "/api/high-severity"], async (req, res) => {
   try {
     const windowDays = parseRecentWindowDays(req.query.days || process.env.DEFAULT_SYNC_WINDOW_DAYS || 30, 30);
     const result = await query(`
@@ -499,7 +503,7 @@ app.get("/api/high-severity", async (req, res) => {
         LIMIT 1
       ) primary_match ON TRUE
       WHERE ${recentWindowPredicate("c.published_at", 1)}
-      ORDER BY ${severityOrderSql("c.severity", "c.cvss_base_score")} DESC, c.cvss_base_score DESC NULLS LAST, c.published_at DESC
+      ORDER BY c.trending_score DESC, ${severityOrderSql("c.severity", "c.cvss_base_score")} DESC, c.cvss_base_score DESC NULLS LAST, c.published_at DESC
       LIMIT 8
     `, [windowDays]);
 
